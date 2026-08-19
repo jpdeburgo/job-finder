@@ -155,6 +155,7 @@ INTERNATIONAL_TITLE_PATTERN = re.compile(
     r"\b(?:INTL|LATAM|India)\b", re.IGNORECASE
 )
 US_COUNTRY_HINTS = ("united states", "usa")
+SENIOR_TITLE_PATTERN = re.compile(r"\b(?:sr\.?|senior)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -306,6 +307,11 @@ def _has_unfamiliar_title_tech(title: str) -> bool:
     return any(_contains_skill(title, tech) for tech in NON_RESUME_TITLE_TECH)
 
 
+def _is_senior_title(title: str) -> bool:
+    """Return True when the title is flagged Sr./Senior."""
+    return SENIOR_TITLE_PATTERN.search(title) is not None
+
+
 def _is_us_country(country: Any) -> bool:
     value = str(country or "").strip().lower()
     return any(hint in value for hint in US_COUNTRY_HINTS)
@@ -362,6 +368,8 @@ def search_term(
             if _has_unfamiliar_title_tech(title):
                 continue
             if _is_stale_posting(record.get("PostedDate")):
+                continue
+            if track.growth_track and _is_senior_title(title):
                 continue
 
             job_type = _format_job_type(record.get("JobType"))

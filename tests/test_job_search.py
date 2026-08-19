@@ -89,6 +89,14 @@ def test_is_stale_posting_uses_max_posted_age_days():
     assert job_search._is_stale_posting("") is False
 
 
+def test_is_senior_title_matches_sr_and_senior():
+    assert job_search._is_senior_title("Senior Application Security Engineer (Java)") is True
+    assert job_search._is_senior_title("Sr. Backend Engineer") is True
+    assert job_search._is_senior_title("Remote Senior Java Developer") is True
+    assert job_search._is_senior_title("Java Developer") is False
+    assert job_search._is_senior_title("Junior Java Developer") is False
+
+
 def test_has_unfamiliar_title_tech_flags_non_resume_stack():
     assert job_search._has_unfamiliar_title_tech("Drupal Senior Frontend Engineer") is True
     assert job_search._has_unfamiliar_title_tech("Android Developer") is True
