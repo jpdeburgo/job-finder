@@ -155,7 +155,9 @@ INTERNATIONAL_TITLE_PATTERN = re.compile(
     r"\b(?:INTL|LATAM|India)\b", re.IGNORECASE
 )
 US_COUNTRY_HINTS = ("united states", "usa")
-SENIOR_TITLE_PATTERN = re.compile(r"\b(?:sr\.?|senior)\b", re.IGNORECASE)
+SENIOR_TITLE_PATTERN = re.compile(
+    r"\b(?:sr\.?|senior|principal|staff|lead)\b", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -308,7 +310,7 @@ def _has_unfamiliar_title_tech(title: str) -> bool:
 
 
 def _is_senior_title(title: str) -> bool:
-    """Return True when the title is flagged Sr./Senior."""
+    """Return True when the title is flagged Sr./Senior/Principal/Staff/Lead."""
     return SENIOR_TITLE_PATTERN.search(title) is not None
 
 

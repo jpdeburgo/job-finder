@@ -89,10 +89,13 @@ def test_is_stale_posting_uses_max_posted_age_days():
     assert job_search._is_stale_posting("") is False
 
 
-def test_is_senior_title_matches_sr_and_senior():
+def test_is_senior_title_matches_overqualified_prefixes():
     assert job_search._is_senior_title("Senior Application Security Engineer (Java)") is True
     assert job_search._is_senior_title("Sr. Backend Engineer") is True
     assert job_search._is_senior_title("Remote Senior Java Developer") is True
+    assert job_search._is_senior_title("Principal Software Engineers - Agentic AI") is True
+    assert job_search._is_senior_title("Staff Engineer (.NET)") is True
+    assert job_search._is_senior_title("Lead iOS Developer") is True
     assert job_search._is_senior_title("Java Developer") is False
     assert job_search._is_senior_title("Junior Java Developer") is False
 
