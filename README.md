@@ -8,12 +8,17 @@ Searches Insight Global for remote jobs matching configurable tracks:
   single skill that do not explicitly require more than three years of
   experience.
 
-International/LATAM/India-titled postings are filtered out unless the
-listing's country is genuinely the US. Titles naming a stack outside the
-resume (Drupal, Android, SAP, Snowflake, etc. — see `NON_RESUME_TITLE_TECH`)
-are dropped too, and postings older than `MAX_POSTED_AGE_DAYS` (30) are
-excluded. Each emailed job shows its Job ID and req number alongside the
-usual details.
+International/LATAM/India/Nearshore-titled postings are filtered out unless
+the listing's country is genuinely the US, as are listings tagged
+`State: "Alaska"` whose city isn't actually in Alaska (a recurring
+placeholder Insight Global uses for offshore postings). Titles naming a
+stack outside the resume (Drupal, Android, SAP, Snowflake, etc. — see
+`NON_RESUME_TITLE_TECH`) are dropped too, along with "COPY - ..." duplicate
+listings and postings older than `MAX_POSTED_AGE_DAYS` (30). A title that
+names a growth-track stack (Java/iOS/.NET) is only ever evaluated under that
+stack's own growth-track rules, even if it racks up enough incidental
+core-skill matches to otherwise pass as a Core match. Each emailed job shows
+its Job ID and req number alongside the usual details.
 
 Only new matches are emailed. Job IDs are kept in `seen_jobs.json` locally or
 in the GitHub repository when the GitHub state variables are configured.

@@ -89,6 +89,32 @@ def test_is_stale_posting_uses_max_posted_age_days():
     assert job_search._is_stale_posting("") is False
 
 
+def test_is_international_title_matches_nearshore():
+    assert job_search._is_international_title("Nearshore Java/React Developer") is True
+
+
+def test_is_bogus_alaska_location_flags_non_alaska_cities():
+    assert job_search._is_bogus_alaska_location("Alaska", "Madhapur") is True
+    assert job_search._is_bogus_alaska_location("Alaska", "Hyderabad") is True
+    assert job_search._is_bogus_alaska_location("Alaska", "Anchorage") is False
+    assert job_search._is_bogus_alaska_location("Arizona", "Phoenix") is False
+
+
+def test_is_placeholder_listing_flags_copy_prefix():
+    assert job_search._is_placeholder_listing(
+        "COPY - Enterprise Applications Accela Developer"
+    ) is True
+    assert job_search._is_placeholder_listing("Java Developer") is False
+
+
+def test_title_names_growth_stack():
+    assert job_search._title_names_growth_stack(
+        "Senior Full Stack Developer (.NET/React/SQL)"
+    ) is True
+    assert job_search._title_names_growth_stack("Java Developer") is True
+    assert job_search._title_names_growth_stack("Full Stack Developer") is False
+
+
 def test_is_senior_title_matches_overqualified_prefixes():
     assert job_search._is_senior_title("Senior Application Security Engineer (Java)") is True
     assert job_search._is_senior_title("Sr. Backend Engineer") is True

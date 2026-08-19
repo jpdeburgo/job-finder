@@ -130,7 +130,38 @@ NON_RESUME_TITLE_TECH = [
     "Dynatrace",
     "Palantir",
     "Ignition",
+    "Accela",
+    "UiPath",
+    "Power Platform",
 ]
+# Insight Global tags some offshore listings with State="Alaska" as a
+# placeholder even when the title doesn't say INTL/LATAM/India/Nearshore
+# (e.g. "Madhapur, Alaska", "Hyderabad, Alaska"). Genuine Alaska postings are
+# vanishingly rare in a remote-only feed, so anything tagged "Alaska" whose
+# city isn't actually in Alaska gets treated as international.
+ALASKA_CITIES = {
+    "anchorage",
+    "fairbanks",
+    "juneau",
+    "wasilla",
+    "sitka",
+    "ketchikan",
+    "kenai",
+    "kodiak",
+    "palmer",
+    "homer",
+    "soldotna",
+    "bethel",
+    "college",
+    "eagle river",
+    "north pole",
+}
+# Growth-track stacks that should only ever be evaluated under their own
+# growth track's rules (junior-friendly cap, no Sr./Senior/etc.), even when a
+# job also racks up enough incidental Core-stack matches to pass that
+# track's laxer threshold. Prioritizes the title's named stack over
+# secondary skill overlap.
+GROWTH_TRACK_TITLE_STACKS = ("Java", "iOS", ".NET")
 
 MIN_SKILL_MATCHES = 2
 GROWTH_TRACK_MAX_YEARS_EXPERIENCE = 3
@@ -152,7 +183,7 @@ YEARS_EXPERIENCE_PATTERN = re.compile(
 )
 DOTNET_DATE_PATTERN = re.compile(r"^/Date\((-?\d+)(?:[+-]\d{4})?\)/$")
 INTERNATIONAL_TITLE_PATTERN = re.compile(
-    r"\b(?:INTL|LATAM|India)\b", re.IGNORECASE
+    r"\b(?:INTL|LATAM|India|Nearshore)\b", re.IGNORECASE
 )
 US_COUNTRY_HINTS = ("united states", "usa")
 SENIOR_TITLE_PATTERN = re.compile(
@@ -319,6 +350,23 @@ def _is_us_country(country: Any) -> bool:
     return any(hint in value for hint in US_COUNTRY_HINTS)
 
 
+def _is_bogus_alaska_location(state: str, city: str) -> bool:
+    """Return True when State="Alaska" but City isn't actually in Alaska."""
+    if state.strip().lower() != "alaska":
+        return False
+    return city.strip().lower() not in ALASKA_CITIES
+
+
+def _is_placeholder_listing(title: str) -> bool:
+    """Return True for leftover duplicate/test listings, e.g. "COPY - ..."."""
+    return title.strip().upper().startswith("COPY")
+
+
+def _title_names_growth_stack(title: str) -> bool:
+    """Return True when the title names a Java/iOS/.NET growth-track stack."""
+    return any(_contains_skill(title, stack) for stack in GROWTH_TRACK_TITLE_STACKS)
+
+
 def _parse_posted_date(value: Any) -> datetime | None:
     raw_value = str(value or "").strip()
     match = DOTNET_DATE_PATTERN.fullmatch(raw_value)
@@ -367,7 +415,15 @@ def search_term(
                 record.get("Country")
             ):
                 continue
+            if _is_bogus_alaska_location(
+                str(record.get("State") or ""), str(record.get("City") or "")
+            ):
+                continue
+            if _is_placeholder_listing(title):
+                continue
             if _has_unfamiliar_title_tech(title):
+                continue
+            if _title_names_growth_stack(title) and not track.growth_track:
                 continue
             if _is_stale_posting(record.get("PostedDate")):
                 continue
