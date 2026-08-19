@@ -61,6 +61,15 @@ def test_partial_github_configuration_is_rejected(monkeypatch):
         raise AssertionError("Expected incomplete GitHub configuration to fail")
 
 
+def test_growth_tracks_mirror_java_for_ios_and_dotnet():
+    growth_tracks = {track.name: track for track in job_search.TRACKS if track.growth_track}
+
+    assert "iOS growth track (entry-level / lower bar)" in growth_tracks
+    assert ".NET growth track (entry-level / lower bar)" in growth_tracks
+    for track in growth_tracks.values():
+        assert track.minimum_matches == 1
+
+
 def test_is_international_title_matches_intl_and_latam():
     assert job_search._is_international_title("Java Developer - INTL India") is True
     assert job_search._is_international_title("Senior Java Developer- LATAM") is True
@@ -96,6 +105,7 @@ def test_build_email_body_uses_hyperlink():
         url="https://jobs.insightglobal.com/jobs/find_a_job/tx/austin/python-engineer/job-1/",
         track="Core matches (your main stack)",
         posted_date="2026-08-15",
+        req_id="AUS-1234",
         matched_skills=["Python", "React"],
         min_years=3,
     )
@@ -103,3 +113,5 @@ def test_build_email_body_uses_hyperlink():
     expected_url = "https://jobs.insightglobal.com/jobs/find_a_job/tx/austin/python-engineer/job-1/"
     assert f'href="{expected_url}"' in body
     assert "Python Engineer" in body
+    assert "Job ID: 1" in body
+    assert "Req: AUS-1234" in body

@@ -1,11 +1,16 @@
 # Insight Global Job Finder
 
-Searches Insight Global for remote jobs matching two configurable tracks:
+Searches Insight Global for remote jobs matching configurable tracks:
 
 - **Core stack:** software engineering roles scored against the skills in
   `RESUME_SKILLS`.
-- **Java growth:** junior and entry-level Java roles that do not explicitly
-  require more than three years of experience.
+- **Growth tracks (Java, iOS, .NET):** junior and entry-level roles in a
+  single skill that do not explicitly require more than three years of
+  experience.
+
+International/LATAM-titled postings are filtered out unless the listing's
+country is genuinely the US. Each emailed job shows its Job ID and req number
+alongside the usual details.
 
 Only new matches are emailed. Job IDs are kept in `seen_jobs.json` locally or
 in the GitHub repository when the GitHub state variables are configured.

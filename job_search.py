@@ -61,7 +61,21 @@ JAVA_SEARCH_TERMS = [
     "Associate Java Developer",
     "Java Engineer",
 ]
-JAVA_JUNIOR_TITLE_HINTS = [
+IOS_SEARCH_TERMS = [
+    "iOS Developer",
+    "Junior iOS Developer",
+    "Entry Level iOS Developer",
+    "Associate iOS Developer",
+    "iOS Engineer",
+]
+DOTNET_SEARCH_TERMS = [
+    ".NET Developer",
+    "Junior .NET Developer",
+    "Entry Level .NET Developer",
+    "Associate .NET Developer",
+    ".NET Engineer",
+]
+GROWTH_TRACK_JUNIOR_TITLE_HINTS = [
     "junior",
     "jr.",
     "jr ",
@@ -72,7 +86,7 @@ JAVA_JUNIOR_TITLE_HINTS = [
 ]
 
 MIN_SKILL_MATCHES = 2
-JAVA_MAX_YEARS_EXPERIENCE = 3
+GROWTH_TRACK_MAX_YEARS_EXPERIENCE = 3
 MAX_YEARS_EXPERIENCE = 7
 REMOTE_ONLY = True
 MAX_PAGES_PER_SEARCH = 3
@@ -99,7 +113,7 @@ class SearchTrack:
     terms: tuple[str, ...]
     skills: tuple[str, ...]
     minimum_matches: int
-    java_growth: bool = False
+    growth_track: bool = False
 
 
 TRACKS = (
@@ -114,7 +128,21 @@ TRACKS = (
         tuple(JAVA_SEARCH_TERMS),
         ("Java",),
         1,
-        java_growth=True,
+        growth_track=True,
+    ),
+    SearchTrack(
+        "iOS growth track (entry-level / lower bar)",
+        tuple(IOS_SEARCH_TERMS),
+        ("iOS",),
+        1,
+        growth_track=True,
+    ),
+    SearchTrack(
+        ".NET growth track (entry-level / lower bar)",
+        tuple(DOTNET_SEARCH_TERMS),
+        (".NET",),
+        1,
+        growth_track=True,
     ),
 )
 
@@ -133,6 +161,7 @@ class JobMatch:
     url: str
     track: str
     posted_date: str = ""
+    req_id: str = ""
     matched_skills: list[str] = field(default_factory=list)
     min_years: int | None = None
 
@@ -203,7 +232,7 @@ def extract_min_years(record: dict[str, Any]) -> int | None:
 
 def looks_junior(record: dict[str, Any]) -> bool:
     title = str(record.get("Title") or "").lower()
-    return any(hint in title for hint in JAVA_JUNIOR_TITLE_HINTS)
+    return any(hint in title for hint in GROWTH_TRACK_JUNIOR_TITLE_HINTS)
 
 
 def _format_job_type(value: Any) -> str:
@@ -274,9 +303,9 @@ def search_term(
                 continue
 
             if (
-                track.java_growth
+                track.growth_track
                 and min_years is not None
-                and min_years > JAVA_MAX_YEARS_EXPERIENCE
+                and min_years > GROWTH_TRACK_MAX_YEARS_EXPERIENCE
                 and not looks_junior(record)
             ):
                 continue
@@ -294,6 +323,7 @@ def search_term(
                 url=slugify_job_url(record),
                 track=track.name,
                 posted_date=format_posted_date(record.get("PostedDate")),
+                req_id=str(record.get("ReferenceID") or ""),
                 matched_skills=matched_skills,
                 min_years=min_years,
             )
@@ -442,6 +472,11 @@ def build_email_body(jobs: list[JobMatch]) -> str:
             if job.posted_date
             else ""
         )
+        req = (
+            f" &nbsp;|&nbsp; Req: {html_module.escape(job.req_id)}"
+            if job.req_id
+            else ""
+        )
         lines.append(
             f'<p><a href="{html_module.escape(job.url)}">'
             f"{html_module.escape(job.title)}</a> "
@@ -450,7 +485,9 @@ def build_email_body(jobs: list[JobMatch]) -> str:
             f" &nbsp;|&nbsp; {html_module.escape(job.job_type)}"
             f" &nbsp;|&nbsp; {html_module.escape(format_salary(job))}"
             f" &nbsp;|&nbsp; {html_module.escape(years)}"
-            f"{posted}</p>"
+            f"{posted}"
+            f" &nbsp;|&nbsp; Job ID: {job.job_id}"
+            f"{req}</p>"
         )
     lines.append("</body></html>")
     return "\n".join(lines)
