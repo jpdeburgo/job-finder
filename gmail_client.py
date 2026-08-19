@@ -64,10 +64,14 @@ def get_gmail_service() -> Any:
 
 
 def send_email(
-    service: Any, subject: str, body_text: str, recipient: str
+    service: Any,
+    subject: str,
+    body_text: str,
+    recipient: str,
+    html: bool = False,
 ) -> str:
-    """Send a plain-text email and return the Gmail message ID."""
-    message = MIMEText(body_text, "plain", "utf-8")
+    """Send a plain-text or HTML email and return the Gmail message ID."""
+    message = MIMEText(body_text, "html" if html else "plain", "utf-8")
     message["To"] = recipient
     message["Subject"] = subject
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")

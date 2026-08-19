@@ -73,8 +73,10 @@ JAVA_JUNIOR_TITLE_HINTS = [
 
 MIN_SKILL_MATCHES = 2
 JAVA_MAX_YEARS_EXPERIENCE = 3
+MAX_YEARS_EXPERIENCE = 7
 REMOTE_ONLY = True
 MAX_PAGES_PER_SEARCH = 3
+CONTRACT_JOB_TYPES = {"contract", "contract to perm", "contract-to-perm"}
 REQUEST_DELAY_SECONDS = 1.5
 
 BASE_URL = "https://jobs.insightglobal.com/find_a_job"
@@ -127,6 +129,7 @@ class JobMatch:
     industry: str
     url: str
     track: str
+    posted_date: str = ""
     matched_skills: list[str] = field(default_factory=list)
     min_years: int | None = None
 
@@ -206,6 +209,11 @@ def _format_job_type(value: Any) -> str:
     return str(value or "Unknown")
 
 
+def _is_contract_job(job_type: str) -> bool:
+    """Return True when the job type is contract or contract-to-perm."""
+    return any(t in job_type.lower() for t in CONTRACT_JOB_TYPES)
+
+
 def search_term(
     session: requests.Session, term: str, track: SearchTrack
 ) -> list[JobMatch]:
@@ -224,11 +232,18 @@ def search_term(
             if REMOTE_ONLY and not record.get("IsRemoteJob"):
                 continue
 
+            job_type = _format_job_type(record.get("JobType"))
+            if not _is_contract_job(job_type):
+                continue
+
             matched_skills = score_record(record, track.skills)
             if len(matched_skills) < track.minimum_matches:
                 continue
 
             min_years = extract_min_years(record)
+            if min_years is not None and min_years > MAX_YEARS_EXPERIENCE:
+                continue
+
             if (
                 track.java_growth
                 and min_years is not None
@@ -243,12 +258,13 @@ def search_term(
                 city=str(record.get("City") or ""),
                 state=str(record.get("State") or ""),
                 is_remote=bool(record.get("IsRemoteJob")),
-                job_type=_format_job_type(record.get("JobType")),
+                job_type=job_type,
                 salary_low=float(record.get("SalaryLow") or 0),
                 salary_high=float(record.get("SalaryHigh") or 0),
                 industry=str(record.get("Industry") or ""),
                 url=slugify_job_url(record),
                 track=track.name,
+                posted_date=str(record.get("PostedDate") or ""),
                 matched_skills=matched_skills,
                 min_years=min_years,
             )
@@ -271,12 +287,16 @@ def run_all_searches() -> list[JobMatch]:
 
     track_order = {track.name: index for index, track in enumerate(TRACKS)}
 
-    def sort_key(job: JobMatch) -> tuple[int, int, float]:
+    def sort_key(job: JobMatch) -> tuple[int, str]:
         order = track_order[job.track]
-        if job.track == TRACKS[1].name:
-            years = job.min_years if job.min_years is not None else 99
-            return order, years, job.salary_low
-        return order, -job.score, -job.salary_high
+        # Negate the date string so that later dates sort first within each
+        # track (ISO-format dates compare lexicographically).
+        inverted_date = (
+            "".join(chr(0xFF - ord(c)) for c in job.posted_date)
+            if job.posted_date
+            else "\xff"  # push undated jobs to the end
+        )
+        return order, inverted_date
 
     return sorted(all_matches.values(), key=sort_key)
 
@@ -366,28 +386,44 @@ def format_salary(job: JobMatch) -> str:
 
 
 def build_email_body(jobs: list[JobMatch]) -> str:
+    """Return an HTML email body with clickable job-title hyperlinks."""
+    import html as html_module
+
     lines = [
-        f"{len(jobs)} new Insight Global job match(es) - "
-        f"{datetime.now():%Y-%m-%d %H:%M}\n"
+        "<html><body>",
+        f"<p><strong>{len(jobs)} new Insight Global job match(es) — "
+        f"{datetime.now():%Y-%m-%d %H:%M}</strong></p>",
     ]
     current_track: str | None = None
     for job in jobs:
         if job.track != current_track:
             current_track = job.track
-            lines.append(f"\n=== {current_track} ===\n")
+            lines.append(f"<h3>{html_module.escape(current_track)}</h3>")
         years = (
             f"est. {job.min_years}+ yrs required"
             if job.min_years is not None
             else "years required: not stated"
         )
-        lines.append(
-            f"{job.title} ({job.score} skill "
-            f"match{'es' if job.score != 1 else ''}: "
-            f"{', '.join(job.matched_skills)})\n"
-            f"  {job.city}, {job.state} | {job.job_type} | "
-            f"{format_salary(job)} | {years}\n"
-            f"  {job.url}\n"
+        skill_text = (
+            f"{job.score} skill match{'es' if job.score != 1 else ''}: "
+            f"{', '.join(job.matched_skills)}"
         )
+        posted = (
+            f" &nbsp;|&nbsp; Posted: {html_module.escape(job.posted_date)}"
+            if job.posted_date
+            else ""
+        )
+        lines.append(
+            f'<p><a href="{html_module.escape(job.url)}">'
+            f"{html_module.escape(job.title)}</a> "
+            f"({html_module.escape(skill_text)})<br>"
+            f"{html_module.escape(job.city)}, {html_module.escape(job.state)}"
+            f" &nbsp;|&nbsp; {html_module.escape(job.job_type)}"
+            f" &nbsp;|&nbsp; {html_module.escape(format_salary(job))}"
+            f" &nbsp;|&nbsp; {html_module.escape(years)}"
+            f"{posted}</p>"
+        )
+    lines.append("</body></html>")
     return "\n".join(lines)
 
 
@@ -405,6 +441,7 @@ def main() -> None:
             f"Insight Global: {len(new_matches)} new job match(es)",
             build_email_body(new_matches),
             os.environ["IG_EMAIL_TO"],
+            html=True,
         )
         print(f"Email sent ({message_id}).")
     else:

@@ -51,3 +51,34 @@ def test_partial_github_configuration_is_rejected(monkeypatch):
         assert "must be set together" in str(error)
     else:
         raise AssertionError("Expected incomplete GitHub configuration to fail")
+
+
+def test_is_contract_job_matches_contract_types():
+    assert job_search._is_contract_job("Contract") is True
+    assert job_search._is_contract_job("Contract To Perm") is True
+    assert job_search._is_contract_job("contract-to-perm") is True
+    assert job_search._is_contract_job("Full Time") is False
+    assert job_search._is_contract_job("Permanent") is False
+
+
+def test_build_email_body_uses_hyperlink():
+    job = job_search.JobMatch(
+        job_id=1,
+        title="Python Engineer",
+        city="Austin",
+        state="TX",
+        is_remote=True,
+        job_type="Contract",
+        salary_low=100000,
+        salary_high=120000,
+        industry="Tech",
+        url="https://jobs.insightglobal.com/jobs/find_a_job/tx/austin/python-engineer/job-1/",
+        track="Core matches (your main stack)",
+        posted_date="2026-08-15",
+        matched_skills=["Python", "React"],
+        min_years=3,
+    )
+    body = job_search.build_email_body([job])
+    expected_url = "https://jobs.insightglobal.com/jobs/find_a_job/tx/austin/python-engineer/job-1/"
+    assert f'href="{expected_url}"' in body
+    assert "Python Engineer" in body
