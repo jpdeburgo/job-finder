@@ -1,0 +1,22 @@
+services:
+  - type: cron
+    name: insight-global-job-search
+    runtime: python
+    schedule: "0 13 * * *"
+    buildCommand: pip install pipenv && pipenv install --system --deploy
+    startCommand: python job_search.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: GMAIL_CREDENTIALS_PATH
+        value: /etc/secrets/credentials.json
+      - key: GMAIL_TOKEN_PATH
+        value: /etc/secrets/token.json
+      - key: IG_EMAIL_TO
+        sync: false
+      - key: IG_GITHUB_TOKEN
+        sync: false
+      - key: IG_GITHUB_REPO
+        sync: false
+      - key: IG_GIT_BRANCH
+        value: main
