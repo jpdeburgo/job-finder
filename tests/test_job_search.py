@@ -29,6 +29,31 @@ def test_extract_min_years_uses_low_end_of_requirements():
     assert job_search.extract_min_years(record) == 3
 
 
+def test_extract_min_years_handles_words_between_years_and_experience():
+    # Real Insight Global phrasing: filler words (and an N-M+ range) sit
+    # between "years" and "experience" instead of directly adjacent to it.
+    record = {
+        "Requirements": (
+            "8-15+ years software engineering (fullstack, emphasis backend "
+            "Python, .NET etc) delivering production-grade solutions. "
+            "6-7+ years of hands-on Python backend development experience."
+        ),
+    }
+
+    assert job_search.extract_min_years(record) == 6
+
+
+def test_extract_min_years_matches_real_concatenated_requirements_text():
+    record = {
+        "Requirements": (
+            "5+ years of software development experienceStrong backend "
+            "development experience with Java"
+        ),
+    }
+
+    assert job_search.extract_min_years(record) == 5
+
+
 def test_format_posted_date_converts_dotnet_timestamp():
     assert job_search.format_posted_date("/Date(1787105014000)/") == "2026-08-19"
 

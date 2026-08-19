@@ -177,9 +177,8 @@ HEADERS = {"User-Agent": "job-finder/1.0 (+personal job search)"}
 JOB_JSON_MARKER = '{"JobID":'
 STATE_FILE = Path(__file__).with_name("seen_jobs.json")
 YEARS_EXPERIENCE_PATTERN = re.compile(
-    r"(\d+)\s*\+?\s*(?:-\s*\d+\s*)?years?\s*(?:of\s*)?"
-    r"(?:experience|exp\b)",
-    re.IGNORECASE,
+    r"(\d+)\s*(?:-\s*\d+\s*)?\+?\s*years?\b.{0,60}?(?:experience|exp\b)",
+    re.IGNORECASE | re.DOTALL,
 )
 DOTNET_DATE_PATTERN = re.compile(r"^/Date\((-?\d+)(?:[+-]\d{4})?\)/$")
 INTERNATIONAL_TITLE_PATTERN = re.compile(
