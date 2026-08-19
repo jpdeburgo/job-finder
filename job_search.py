@@ -87,12 +87,16 @@ GROWTH_TRACK_JUNIOR_TITLE_HINTS = [
 # Named platforms/frameworks that show up in titles but aren't on the resume.
 # A title calling one of these out means the role's core stack is unfamiliar
 # territory, even if the description racks up incidental skill matches
-# elsewhere. Add to this list as new mismatches show up.
+# elsewhere. Cross-checked against the resume (Vue.js, Angular, and Ruby are
+# on there, so they're deliberately excluded from this list). Add to this
+# list as new mismatches show up.
 NON_RESUME_TITLE_TECH = [
+    "Android",
     "Drupal",
     "WordPress",
     "Salesforce",
     "SAP",
+    "Hybris",
     "ServiceNow",
     "Workday",
     "Magento",
@@ -103,12 +107,9 @@ NON_RESUME_TITLE_TECH = [
     "COBOL",
     "ABAP",
     "PHP",
-    "Angular",
-    "Vue",
     "Golang",
     "Kotlin",
     "Swift",
-    "Ruby",
     "Scala",
     "Rust",
     "Perl",
@@ -121,12 +122,20 @@ NON_RESUME_TITLE_TECH = [
     "Pega",
     "Appian",
     "OutSystems",
+    "Snowflake",
+    "Alteryx",
+    "Informatica",
+    "IDMC",
+    "Enovia",
+    "Dynatrace",
+    "Palantir",
+    "Ignition",
 ]
 
 MIN_SKILL_MATCHES = 2
 GROWTH_TRACK_MAX_YEARS_EXPERIENCE = 3
 MAX_YEARS_EXPERIENCE = 7
-MAX_POSTED_AGE_DAYS = 60
+MAX_POSTED_AGE_DAYS = 30
 REMOTE_ONLY = True
 MAX_PAGES_PER_SEARCH = 3
 CONTRACT_JOB_TYPES = {"contract", "contract to perm", "contract-to-perm"}

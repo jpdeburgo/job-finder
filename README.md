@@ -8,9 +8,12 @@ Searches Insight Global for remote jobs matching configurable tracks:
   single skill that do not explicitly require more than three years of
   experience.
 
-International/LATAM-titled postings are filtered out unless the listing's
-country is genuinely the US. Each emailed job shows its Job ID and req number
-alongside the usual details.
+International/LATAM/India-titled postings are filtered out unless the
+listing's country is genuinely the US. Titles naming a stack outside the
+resume (Drupal, Android, SAP, Snowflake, etc. — see `NON_RESUME_TITLE_TECH`)
+are dropped too, and postings older than `MAX_POSTED_AGE_DAYS` (30) are
+excluded. Each emailed job shows its Job ID and req number alongside the
+usual details.
 
 Only new matches are emailed. Job IDs are kept in `seen_jobs.json` locally or
 in the GitHub repository when the GitHub state variables are configured.

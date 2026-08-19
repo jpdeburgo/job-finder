@@ -91,8 +91,15 @@ def test_is_stale_posting_uses_max_posted_age_days():
 
 def test_has_unfamiliar_title_tech_flags_non_resume_stack():
     assert job_search._has_unfamiliar_title_tech("Drupal Senior Frontend Engineer") is True
+    assert job_search._has_unfamiliar_title_tech("Android Developer") is True
     assert job_search._has_unfamiliar_title_tech("Senior Software Engineer (React)") is False
     assert job_search._has_unfamiliar_title_tech(".NET Developer") is False
+
+
+def test_has_unfamiliar_title_tech_allows_skills_on_resume():
+    assert job_search._has_unfamiliar_title_tech("Vue.js Developer") is False
+    assert job_search._has_unfamiliar_title_tech("Angular Developer") is False
+    assert job_search._has_unfamiliar_title_tech("Ruby on Rails Developer") is False
 
 
 def test_is_international_title_matches_intl_and_latam():
