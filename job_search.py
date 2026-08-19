@@ -15,8 +15,11 @@ from typing import Any
 from urllib.parse import quote_plus
 
 import requests
+from dotenv import load_dotenv
 
 from gmail_client import get_gmail_service, send_email
+
+load_dotenv()
 
 SEARCH_TITLES = [
     "Software Engineer",

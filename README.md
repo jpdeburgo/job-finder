@@ -40,7 +40,9 @@ export GMAIL_TOKEN_PATH=/path/to/token.json
 export IG_EMAIL_TO=you@example.com
 ```
 
-Never commit `credentials.json`, `token.json`, or `.env`.
+Copy `.env.example` to `.env` and replace the example recipient if you prefer
+file-based configuration; the script loads `.env` automatically. Never commit
+`credentials.json`, `token.json`, or `.env`.
 
 ## State persistence
 
