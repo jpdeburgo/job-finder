@@ -9,7 +9,7 @@ import re
 import tempfile
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
@@ -88,6 +88,9 @@ YEARS_EXPERIENCE_PATTERN = re.compile(
     r"(?:experience|exp\b)",
     re.IGNORECASE,
 )
+DOTNET_DATE_PATTERN = re.compile(r"^/Date\((-?\d+)(?:[+-]\d{4})?\)/$")
+INTERNATIONAL_TITLE_PATTERN = re.compile(r"\b(?:INTL|LATAM)\b", re.IGNORECASE)
+US_COUNTRY_HINTS = ("united states", "usa")
 
 
 @dataclass(frozen=True)
@@ -214,6 +217,26 @@ def _is_contract_job(job_type: str) -> bool:
     return any(t in job_type.lower() for t in CONTRACT_JOB_TYPES)
 
 
+def _is_international_title(title: str) -> bool:
+    """Return True when the title is flagged as an offshore INTL/LATAM role."""
+    return INTERNATIONAL_TITLE_PATTERN.search(title) is not None
+
+
+def _is_us_country(country: Any) -> bool:
+    value = str(country or "").strip().lower()
+    return any(hint in value for hint in US_COUNTRY_HINTS)
+
+
+def format_posted_date(value: Any) -> str:
+    raw_value = str(value or "").strip()
+    match = DOTNET_DATE_PATTERN.fullmatch(raw_value)
+    if not match:
+        return raw_value
+
+    milliseconds = int(match.group(1))
+    return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).date().isoformat()
+
+
 def search_term(
     session: requests.Session, term: str, track: SearchTrack
 ) -> list[JobMatch]:
@@ -230,6 +253,12 @@ def search_term(
             if not isinstance(job_id, int) or job_id in matches:
                 continue
             if REMOTE_ONLY and not record.get("IsRemoteJob"):
+                continue
+
+            title = str(record.get("Title") or "Unknown title")
+            if _is_international_title(title) and not _is_us_country(
+                record.get("Country")
+            ):
                 continue
 
             job_type = _format_job_type(record.get("JobType"))
@@ -254,7 +283,7 @@ def search_term(
 
             matches[job_id] = JobMatch(
                 job_id=job_id,
-                title=str(record.get("Title") or "Unknown title"),
+                title=title,
                 city=str(record.get("City") or ""),
                 state=str(record.get("State") or ""),
                 is_remote=bool(record.get("IsRemoteJob")),
@@ -264,7 +293,7 @@ def search_term(
                 industry=str(record.get("Industry") or ""),
                 url=slugify_job_url(record),
                 track=track.name,
-                posted_date=str(record.get("PostedDate") or ""),
+                posted_date=format_posted_date(record.get("PostedDate")),
                 matched_skills=matched_skills,
                 min_years=min_years,
             )

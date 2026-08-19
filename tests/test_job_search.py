@@ -29,6 +29,14 @@ def test_extract_min_years_uses_low_end_of_requirements():
     assert job_search.extract_min_years(record) == 3
 
 
+def test_format_posted_date_converts_dotnet_timestamp():
+    assert job_search.format_posted_date("/Date(1787105014000)/") == "2026-08-19"
+
+
+def test_format_posted_date_preserves_iso_date():
+    assert job_search.format_posted_date("2026-08-15") == "2026-08-15"
+
+
 def test_local_state_round_trip(tmp_path, monkeypatch):
     state_file = tmp_path / "seen_jobs.json"
     monkeypatch.setattr(job_search, "STATE_FILE", state_file)
@@ -51,6 +59,19 @@ def test_partial_github_configuration_is_rejected(monkeypatch):
         assert "must be set together" in str(error)
     else:
         raise AssertionError("Expected incomplete GitHub configuration to fail")
+
+
+def test_is_international_title_matches_intl_and_latam():
+    assert job_search._is_international_title("Java Developer - INTL India") is True
+    assert job_search._is_international_title("Senior Java Developer- LATAM") is True
+    assert job_search._is_international_title("Java Developer") is False
+
+
+def test_is_us_country_requires_full_name_or_usa():
+    assert job_search._is_us_country("United States") is True
+    assert job_search._is_us_country("USA") is True
+    assert job_search._is_us_country("US") is False
+    assert job_search._is_us_country(None) is False
 
 
 def test_is_contract_job_matches_contract_types():
