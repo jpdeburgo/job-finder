@@ -84,6 +84,44 @@ GROWTH_TRACK_JUNIOR_TITLE_HINTS = [
     "associate",
     "i ",
 ]
+# Named platforms/frameworks that show up in titles but aren't on the resume.
+# A title calling one of these out means the role's core stack is unfamiliar
+# territory, even if the description racks up incidental skill matches
+# elsewhere. Add to this list as new mismatches show up.
+NON_RESUME_TITLE_TECH = [
+    "Drupal",
+    "WordPress",
+    "Salesforce",
+    "SAP",
+    "ServiceNow",
+    "Workday",
+    "Magento",
+    "Shopify",
+    "Sitecore",
+    "PeopleSoft",
+    "Mainframe",
+    "COBOL",
+    "ABAP",
+    "PHP",
+    "Angular",
+    "Vue",
+    "Golang",
+    "Kotlin",
+    "Swift",
+    "Ruby",
+    "Scala",
+    "Rust",
+    "Perl",
+    "MATLAB",
+    "SAS",
+    "Tableau",
+    "Power BI",
+    "MuleSoft",
+    "Guidewire",
+    "Pega",
+    "Appian",
+    "OutSystems",
+]
 
 MIN_SKILL_MATCHES = 2
 GROWTH_TRACK_MAX_YEARS_EXPERIENCE = 3
@@ -251,6 +289,11 @@ def _is_international_title(title: str) -> bool:
     return INTERNATIONAL_TITLE_PATTERN.search(title) is not None
 
 
+def _has_unfamiliar_title_tech(title: str) -> bool:
+    """Return True when the title names a stack that isn't on the resume."""
+    return any(_contains_skill(title, tech) for tech in NON_RESUME_TITLE_TECH)
+
+
 def _is_us_country(country: Any) -> bool:
     value = str(country or "").strip().lower()
     return any(hint in value for hint in US_COUNTRY_HINTS)
@@ -288,6 +331,8 @@ def search_term(
             if _is_international_title(title) and not _is_us_country(
                 record.get("Country")
             ):
+                continue
+            if _has_unfamiliar_title_tech(title):
                 continue
 
             job_type = _format_job_type(record.get("JobType"))

@@ -70,6 +70,12 @@ def test_growth_tracks_mirror_java_for_ios_and_dotnet():
         assert track.minimum_matches == 1
 
 
+def test_has_unfamiliar_title_tech_flags_non_resume_stack():
+    assert job_search._has_unfamiliar_title_tech("Drupal Senior Frontend Engineer") is True
+    assert job_search._has_unfamiliar_title_tech("Senior Software Engineer (React)") is False
+    assert job_search._has_unfamiliar_title_tech(".NET Developer") is False
+
+
 def test_is_international_title_matches_intl_and_latam():
     assert job_search._is_international_title("Java Developer - INTL India") is True
     assert job_search._is_international_title("Senior Java Developer- LATAM") is True
