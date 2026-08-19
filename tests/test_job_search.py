@@ -70,6 +70,25 @@ def test_growth_tracks_mirror_java_for_ios_and_dotnet():
         assert track.minimum_matches == 1
 
 
+def test_is_international_title_matches_india():
+    assert job_search._is_international_title(
+        "Front-End Developer (India) - React, Typescript, Next.JS, AWS"
+    ) is True
+    assert job_search._is_international_title("Indianapolis Backend Developer") is False
+
+
+def test_is_stale_posting_uses_max_posted_age_days():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    recent_ms = int((now - timedelta(days=10)).timestamp() * 1000)
+    stale_ms = int((now - timedelta(days=90)).timestamp() * 1000)
+
+    assert job_search._is_stale_posting(f"/Date({recent_ms})/") is False
+    assert job_search._is_stale_posting(f"/Date({stale_ms})/") is True
+    assert job_search._is_stale_posting("") is False
+
+
 def test_has_unfamiliar_title_tech_flags_non_resume_stack():
     assert job_search._has_unfamiliar_title_tech("Drupal Senior Frontend Engineer") is True
     assert job_search._has_unfamiliar_title_tech("Senior Software Engineer (React)") is False

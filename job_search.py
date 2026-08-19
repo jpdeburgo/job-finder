@@ -126,6 +126,7 @@ NON_RESUME_TITLE_TECH = [
 MIN_SKILL_MATCHES = 2
 GROWTH_TRACK_MAX_YEARS_EXPERIENCE = 3
 MAX_YEARS_EXPERIENCE = 7
+MAX_POSTED_AGE_DAYS = 60
 REMOTE_ONLY = True
 MAX_PAGES_PER_SEARCH = 3
 CONTRACT_JOB_TYPES = {"contract", "contract to perm", "contract-to-perm"}
@@ -141,7 +142,9 @@ YEARS_EXPERIENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DOTNET_DATE_PATTERN = re.compile(r"^/Date\((-?\d+)(?:[+-]\d{4})?\)/$")
-INTERNATIONAL_TITLE_PATTERN = re.compile(r"\b(?:INTL|LATAM)\b", re.IGNORECASE)
+INTERNATIONAL_TITLE_PATTERN = re.compile(
+    r"\b(?:INTL|LATAM|India)\b", re.IGNORECASE
+)
 US_COUNTRY_HINTS = ("united states", "usa")
 
 
@@ -299,14 +302,29 @@ def _is_us_country(country: Any) -> bool:
     return any(hint in value for hint in US_COUNTRY_HINTS)
 
 
-def format_posted_date(value: Any) -> str:
+def _parse_posted_date(value: Any) -> datetime | None:
     raw_value = str(value or "").strip()
     match = DOTNET_DATE_PATTERN.fullmatch(raw_value)
     if not match:
-        return raw_value
+        return None
 
     milliseconds = int(match.group(1))
-    return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).date().isoformat()
+    return datetime.fromtimestamp(milliseconds / 1000, timezone.utc)
+
+
+def format_posted_date(value: Any) -> str:
+    parsed = _parse_posted_date(value)
+    if parsed is None:
+        return str(value or "").strip()
+    return parsed.date().isoformat()
+
+
+def _is_stale_posting(value: Any) -> bool:
+    """Return True when PostedDate is older than MAX_POSTED_AGE_DAYS."""
+    parsed = _parse_posted_date(value)
+    if parsed is None:
+        return False
+    return (datetime.now(timezone.utc) - parsed).days > MAX_POSTED_AGE_DAYS
 
 
 def search_term(
@@ -333,6 +351,8 @@ def search_term(
             ):
                 continue
             if _has_unfamiliar_title_tech(title):
+                continue
+            if _is_stale_posting(record.get("PostedDate")):
                 continue
 
             job_type = _format_job_type(record.get("JobType"))
