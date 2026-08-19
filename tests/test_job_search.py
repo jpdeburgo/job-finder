@@ -79,6 +79,6 @@ def test_build_email_body_uses_hyperlink():
         min_years=3,
     )
     body = job_search.build_email_body([job])
-    assert '<a href="https://jobs.insightglobal.com' in body
+    expected_url = "https://jobs.insightglobal.com/jobs/find_a_job/tx/austin/python-engineer/job-1/"
+    assert f'href="{expected_url}"' in body
     assert "Python Engineer" in body
-    assert "https://jobs.insightglobal.com" in body
