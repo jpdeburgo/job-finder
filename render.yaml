@@ -4,7 +4,7 @@ services:
     runtime: python
     schedule: "0 13 * * *"
     buildCommand: pip install pipenv && pipenv install --system --deploy
-    startCommand: python job_search.py
+    startCommand: python -u job_search.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9

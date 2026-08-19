@@ -72,7 +72,8 @@ Blueprint, then:
 3. Set `IG_EMAIL_TO`, `IG_GITHUB_TOKEN`, and `IG_GITHUB_REPO`.
 
 The Blueprint mounts the secret files at `/etc/secrets` and pins Python to the
-same version as the Pipfile.
+same version as the Pipfile. Render secret files are read-only; refreshed Gmail
+credentials are used in memory without attempting to modify the mounted token.
 
 ## Tests
 

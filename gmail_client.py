@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import os
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -14,6 +15,20 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
+
+
+def _save_token(token_path: Path, credentials: Credentials) -> None:
+    """Cache refreshed credentials unless the configured secret is read-only."""
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        token_path.write_text(credentials.to_json(), encoding="utf-8")
+    except OSError as error:
+        if error.errno != errno.EROFS:
+            raise
+        print(
+            f"Gmail token refreshed in memory; skipping write to read-only "
+            f"{token_path}."
+        )
 
 
 def get_gmail_service() -> Any:
@@ -43,8 +58,7 @@ def get_gmail_service() -> Any:
             )
             credentials = flow.run_local_server(port=0)
 
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(credentials.to_json(), encoding="utf-8")
+        _save_token(token_path, credentials)
 
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
