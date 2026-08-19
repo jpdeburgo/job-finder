@@ -1,7 +1,12 @@
 import base64
+import errno
 from email import message_from_bytes
+from pathlib import Path
+from unittest.mock import Mock
 
-from gmail_client import send_email
+import pytest
+
+from gmail_client import _save_token, send_email
 
 
 class FakeExecute:
@@ -50,3 +55,32 @@ def test_send_email_uses_requested_recipient():
     message = message_from_bytes(base64.urlsafe_b64decode(sent["body"]["raw"]))
     assert message["To"] == "recipient@example.com"
     assert message["Subject"] == "Job matches"
+
+
+def test_save_token_allows_read_only_render_secret(
+    tmp_path, monkeypatch, capsys
+):
+    credentials = Mock()
+    credentials.to_json.return_value = '{"refresh_token":"token"}'
+    monkeypatch.setattr(
+        Path,
+        "write_text",
+        Mock(side_effect=OSError(errno.EROFS, "Read-only file system")),
+    )
+
+    _save_token(tmp_path / "token.json", credentials)
+
+    assert "refreshed in memory" in capsys.readouterr().out
+
+
+def test_save_token_does_not_hide_other_write_errors(monkeypatch):
+    credentials = Mock()
+    credentials.to_json.return_value = "{}"
+    monkeypatch.setattr(
+        Path,
+        "write_text",
+        Mock(side_effect=OSError(errno.ENOSPC, "No space left on device")),
+    )
+
+    with pytest.raises(OSError, match="No space left"):
+        _save_token(Path("/tmp/token.json"), credentials)
