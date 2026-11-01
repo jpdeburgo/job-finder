@@ -49,6 +49,20 @@ RESUME_SKILLS = [
     "AWS",
     "Firebase",
 ]
+# A Core match needs at least one of these on top of MIN_SKILL_MATCHES, so a
+# posting that only mentions cloud tooling or SQL (e.g. a network security
+# role listing Azure and AWS) doesn't qualify as your main stack.
+CORE_LANGUAGE_SKILLS = [
+    "Python",
+    "JavaScript",
+    "TypeScript",
+    "Java",
+    "React",
+    "ReactJS",
+    "React Native",
+    "Node.js",
+    "NodeJS",
+]
 EXTRA_SEARCH_TERMS = [
     "Python Developer",
     "React Engineer",
@@ -204,6 +218,8 @@ class SearchTrack:
     skills: tuple[str, ...]
     minimum_matches: int
     growth_track: bool = False
+    # When set, at least one of these must be among the matched skills.
+    required_skills: tuple[str, ...] = ()
 
 
 TRACKS = (
@@ -212,6 +228,7 @@ TRACKS = (
         tuple(SEARCH_TITLES + EXTRA_SEARCH_TERMS),
         tuple(RESUME_SKILLS),
         MIN_SKILL_MATCHES,
+        required_skills=tuple(CORE_LANGUAGE_SKILLS),
     ),
     SearchTrack(
         "Java growth track (entry-level / lower bar)",
@@ -474,6 +491,10 @@ def search_term(
             }
             matched_skills = score_record(record, track.skills)
             if len(matched_skills) < track.minimum_matches:
+                continue
+            if track.required_skills and not set(track.required_skills) & set(
+                matched_skills
+            ):
                 continue
 
             min_years = extract_min_years(record)

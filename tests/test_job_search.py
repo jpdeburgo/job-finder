@@ -535,3 +535,31 @@ def test_run_all_searches_raises_when_every_term_fails(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Every search failed"):
         job_search.run_all_searches()
+
+
+def test_core_track_requires_a_core_language_not_just_cloud_skills(no_delay):
+    jobs = [
+        _api_job("cloud-only", jobTitle="Network Security Engineer"),
+        _api_job("has-python", jobTitle="Platform Engineer"),
+    ]
+    session = FakeSession(
+        [_page(jobs)],
+        {
+            "cloud-only": "Network security on Azure and AWS with SQL",
+            "has-python": "Python scripting on AWS",
+        },
+    )
+
+    matches = job_search.search_term(session, "Python Developer", CORE_TRACK)
+
+    assert [m.job_id for m in matches] == ["has-python"]
+
+
+def test_growth_tracks_do_not_require_a_core_language():
+    for track in job_search.TRACKS:
+        if track.growth_track:
+            assert track.required_skills == ()
+
+
+def test_core_language_skills_are_all_resume_skills():
+    assert set(job_search.CORE_LANGUAGE_SKILLS) <= set(job_search.RESUME_SKILLS)

@@ -3,14 +3,17 @@
 Searches Insight Global for remote jobs matching configurable tracks:
 
 - **Core stack:** software engineering roles scored against the skills in
-  `RESUME_SKILLS`.
+  `RESUME_SKILLS`. A job needs at least two matches, one of them a core
+  language (`CORE_LANGUAGE_SKILLS`: Python, JavaScript, TypeScript, Java,
+  React, Node.js), so postings that only mention cloud tooling or SQL
+  don't qualify.
 - **Growth tracks (Java, iOS, .NET):** junior and entry-level roles in a
   single skill that do not explicitly require more than three years of
   experience.
 
-International/LATAM/India/Nearshore-titled postings are filtered out unless
-the listing's country is genuinely the US, as are listings tagged
-`State: "Alaska"` whose city isn't actually in Alaska (a recurring
+International/LATAM/India/Nearshore-titled postings are always filtered out
+(the feed has no country, and these listings carry placeholder US locations),
+as are listings tagged Alaska whose city isn't actually in Alaska (a recurring
 placeholder Insight Global uses for offshore postings). Titles naming a
 stack outside the resume (Drupal, Android, SAP, Snowflake, etc. — see
 `NON_RESUME_TITLE_TECH`) are dropped too, along with "COPY - ..." duplicate
