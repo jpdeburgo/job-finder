@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import base64
-import json
+import html
 import os
 import re
-import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import urljoin
 
 import requests
 from dotenv import load_dotenv
 
 from gmail_client import get_gmail_service, send_email
+from job_store import FirestoreJobStore, get_job_store
 
 load_dotenv()
 
@@ -134,10 +132,10 @@ NON_RESUME_TITLE_TECH = [
     "UiPath",
     "Power Platform",
 ]
-# Insight Global tags some offshore listings with State="Alaska" as a
+# Insight Global tags some offshore listings with a state of Alaska as a
 # placeholder even when the title doesn't say INTL/LATAM/India/Nearshore
 # (e.g. "Madhapur, Alaska", "Hyderabad, Alaska"). Genuine Alaska postings are
-# vanishingly rare in a remote-only feed, so anything tagged "Alaska" whose
+# vanishingly rare in a remote-only feed, so anything tagged Alaska whose
 # city isn't actually in Alaska gets treated as international.
 ALASKA_CITIES = {
     "anchorage",
@@ -169,22 +167,26 @@ MAX_YEARS_EXPERIENCE = 7
 MAX_POSTED_AGE_DAYS = 30
 REMOTE_ONLY = True
 MAX_PAGES_PER_SEARCH = 3
+PAGE_SIZE = 50  # the API silently caps page size at 50
 CONTRACT_JOB_TYPES = {"contract", "contract to perm", "contract-to-perm"}
 REQUEST_DELAY_SECONDS = 1.5
 
-BASE_URL = "https://jobs.insightglobal.com/find_a_job"
+# The search page is an Angular app that renders its results client-side, so
+# there is no job data in its HTML. The page loads jobs from a JSON API on the
+# same host (``/all/jobs`` for search, ``/all/jobs/<id>/details`` for the
+# description); we call that API directly and link to the public job page.
+BASE_URL = "https://insightglobal.com/jobs/search/all/all"
+API_URL = urljoin(BASE_URL, "/all/jobs")
+JOB_PAGE_URL = urljoin(BASE_URL, "/jobs/")
 HEADERS = {"User-Agent": "job-finder/1.0 (+personal job search)"}
-JOB_JSON_MARKER = '{"JobID":'
-STATE_FILE = Path(__file__).with_name("seen_jobs.json")
 YEARS_EXPERIENCE_PATTERN = re.compile(
     r"(\d+)\s*(?:-\s*\d+\s*)?\+?\s*years?\b.{0,60}?(?:experience|exp\b)",
     re.IGNORECASE | re.DOTALL,
 )
-DOTNET_DATE_PATTERN = re.compile(r"^/Date\((-?\d+)(?:[+-]\d{4})?\)/$")
+HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 INTERNATIONAL_TITLE_PATTERN = re.compile(
     r"\b(?:INTL|LATAM|India|Nearshore)\b", re.IGNORECASE
 )
-US_COUNTRY_HINTS = ("united states", "usa")
 SENIOR_TITLE_PATTERN = re.compile(
     r"\b(?:sr\.?|senior|principal|staff|lead)\b", re.IGNORECASE
 )
@@ -232,7 +234,7 @@ TRACKS = (
 
 @dataclass
 class JobMatch:
-    job_id: int
+    job_id: str
     title: str
     city: str
     state: str
@@ -240,11 +242,9 @@ class JobMatch:
     job_type: str
     salary_low: float
     salary_high: float
-    industry: str
     url: str
     track: str
     posted_date: str = ""
-    req_id: str = ""
     matched_skills: list[str] = field(default_factory=list)
     min_years: int | None = None
 
@@ -253,42 +253,26 @@ class JobMatch:
         return len(self.matched_skills)
 
 
-def build_search_url(term: str, page: int) -> str:
-    page_segment = "" if page == 1 else f"{page}/"
-    query = (
-        f"?remote={'true' if REMOTE_ONLY else 'false'}"
-        f"&miles=False&srch={quote_plus(term)}"
-    )
-    return f"{BASE_URL}/{page_segment}{query}"
+def build_search_params(term: str, page: int) -> dict[str, Any]:
+    return {
+        "keyword": term,
+        "page": page,
+        "size": PAGE_SIZE,
+        "sort": "relevance,desc",
+        "filter.includeOnlyRemoteWork": "true" if REMOTE_ONLY else "false",
+        "filter.distance": 5,
+        "filter.status": "active",
+    }
 
 
-def extract_job_records(html: str) -> list[dict[str, Any]]:
-    """Extract embedded job JSON objects from a search results page."""
-    records: list[dict[str, Any]] = []
-    decoder = json.JSONDecoder()
-    for match in re.finditer(re.escape(JOB_JSON_MARKER), html):
-        try:
-            record, _ = decoder.raw_decode(html, match.start())
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
-    return records
+def build_job_url(job_id: str) -> str:
+    return f"{JOB_PAGE_URL}{job_id}"
 
 
-def slugify_job_url(record: dict[str, Any]) -> str:
-    state = re.sub(r"[^a-z0-9]+", "-", str(record.get("State") or "").lower())
-    city = re.sub(r"[^a-z0-9]+", "-", str(record.get("City") or "").lower())
-    title = re.sub(
-        r"[^a-z0-9]+", "-", str(record.get("Title") or "").lower()
-    ).strip("-")
-    job_id = record.get("JobID")
-    if state and city and title and job_id:
-        return (
-            "https://jobs.insightglobal.com/jobs/find_a_job/"
-            f"{state.strip('-')}/{city.strip('-')}/{title}/job-{job_id}/"
-        )
-    return f"{BASE_URL}/?srch={job_id}"
+def html_to_text(value: Any) -> str:
+    """Flatten the HTML description the details API returns to plain text."""
+    text = HTML_TAG_PATTERN.sub(" ", str(value or ""))
+    return re.sub(r"\s+", " ", html.unescape(text)).strip()
 
 
 def _contains_skill(text: str, skill: str) -> bool:
@@ -299,22 +283,19 @@ def _contains_skill(text: str, skill: str) -> bool:
 
 def score_record(record: dict[str, Any], skills: tuple[str, ...]) -> list[str]:
     haystack = " ".join(
-        str(record.get(key) or "")
-        for key in ("Title", "Description", "Requirements", "Skills")
+        str(record.get(key) or "") for key in ("jobTitle", "description")
     )
     return [skill for skill in skills if _contains_skill(haystack, skill)]
 
 
 def extract_min_years(record: dict[str, Any]) -> int | None:
-    haystack = " ".join(
-        str(record.get(key) or "") for key in ("Requirements", "Description")
-    )
+    haystack = str(record.get("description") or "")
     years = [int(match) for match in YEARS_EXPERIENCE_PATTERN.findall(haystack)]
     return min(years) if years else None
 
 
 def looks_junior(record: dict[str, Any]) -> bool:
-    title = str(record.get("Title") or "").lower()
+    title = str(record.get("jobTitle") or "").lower()
     return any(hint in title for hint in GROWTH_TRACK_JUNIOR_TITLE_HINTS)
 
 
@@ -330,7 +311,11 @@ def _is_contract_job(job_type: str) -> bool:
 
 
 def _is_international_title(title: str) -> bool:
-    """Return True when the title is flagged as an offshore INTL/LATAM role."""
+    """Return True when the title is flagged as an offshore INTL/LATAM role.
+
+    The feed has no country, and these listings carry placeholder US locations
+    (e.g. "INTL India" in Dunwoody, GA), so the title is the only signal.
+    """
     return INTERNATIONAL_TITLE_PATTERN.search(title) is not None
 
 
@@ -344,14 +329,9 @@ def _is_senior_title(title: str) -> bool:
     return SENIOR_TITLE_PATTERN.search(title) is not None
 
 
-def _is_us_country(country: Any) -> bool:
-    value = str(country or "").strip().lower()
-    return any(hint in value for hint in US_COUNTRY_HINTS)
-
-
 def _is_bogus_alaska_location(state: str, city: str) -> bool:
-    """Return True when State="Alaska" but City isn't actually in Alaska."""
-    if state.strip().lower() != "alaska":
+    """Return True when the state is Alaska but the city isn't actually in Alaska."""
+    if state.strip().lower() not in ("alaska", "ak"):
         return False
     return city.strip().lower() not in ALASKA_CITIES
 
@@ -367,13 +347,14 @@ def _title_names_growth_stack(title: str) -> bool:
 
 
 def _parse_posted_date(value: Any) -> datetime | None:
-    raw_value = str(value or "").strip()
-    match = DOTNET_DATE_PATTERN.fullmatch(raw_value)
-    if not match:
+    # postedDate looks like "2026-10-29T15:42:48.1Z"; the first 19 characters
+    # (YYYY-MM-DDTHH:MM:SS) parse the same on every Python version.
+    raw_value = str(value or "").strip()[:19]
+    try:
+        parsed = datetime.fromisoformat(raw_value)
+    except ValueError:
         return None
-
-    milliseconds = int(match.group(1))
-    return datetime.fromtimestamp(milliseconds / 1000, timezone.utc)
+    return parsed.replace(tzinfo=timezone.utc)
 
 
 def format_posted_date(value: Any) -> str:
@@ -391,32 +372,52 @@ def _is_stale_posting(value: Any) -> bool:
     return (datetime.now(timezone.utc) - parsed).days > MAX_POSTED_AGE_DAYS
 
 
-def search_term(
-    session: requests.Session, term: str, track: SearchTrack
-) -> list[JobMatch]:
-    matches: dict[int, JobMatch] = {}
-    for page in range(1, MAX_PAGES_PER_SEARCH + 1):
-        response = session.get(build_search_url(term, page), timeout=20)
+def fetch_job_page(session: requests.Session, term: str, page: int) -> dict[str, Any]:
+    response = session.get(API_URL, params=build_search_params(term, page), timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_description(
+    session: requests.Session, job_id: str, cache: dict[str, str]
+) -> str:
+    """Return a job's plain-text description, fetching each job at most once."""
+    if job_id not in cache:
+        response = session.get(f"{API_URL}/{job_id}/details", timeout=20)
         response.raise_for_status()
-        records = extract_job_records(response.text)
+        cache[job_id] = html_to_text(response.json().get("description"))
+        time.sleep(REQUEST_DELAY_SECONDS)
+    return cache[job_id]
+
+
+def search_term(
+    session: requests.Session,
+    term: str,
+    track: SearchTrack,
+    descriptions: dict[str, str] | None = None,
+) -> list[JobMatch]:
+    descriptions = {} if descriptions is None else descriptions
+    matches: dict[str, JobMatch] = {}
+    for page in range(1, MAX_PAGES_PER_SEARCH + 1):
+        payload = fetch_job_page(session, term, page)
+        records = payload.get("jobs") or []
         if not records:
             break
 
         for record in records:
-            job_id = record.get("JobID")
-            if not isinstance(job_id, int) or job_id in matches:
+            job_id = record.get("requisitionId")
+            if not isinstance(job_id, str) or job_id in matches:
                 continue
-            if REMOTE_ONLY and not record.get("IsRemoteJob"):
+            if REMOTE_ONLY and not record.get("workRemote"):
                 continue
 
-            title = str(record.get("Title") or "Unknown title")
-            if _is_international_title(title) and not _is_us_country(
-                record.get("Country")
-            ):
+            title = str(record.get("jobTitle") or "").strip() or "Unknown title"
+            address = record.get("workAddress") or {}
+            state = str(address.get("administrativeArea") or "")
+            city = str(address.get("locality") or "")
+            if _is_international_title(title):
                 continue
-            if _is_bogus_alaska_location(
-                str(record.get("State") or ""), str(record.get("City") or "")
-            ):
+            if _is_bogus_alaska_location(state, city):
                 continue
             if _is_placeholder_listing(title):
                 continue
@@ -424,15 +425,21 @@ def search_term(
                 continue
             if _title_names_growth_stack(title) and not track.growth_track:
                 continue
-            if _is_stale_posting(record.get("PostedDate")):
+            if _is_stale_posting(record.get("postedDate")):
                 continue
             if track.growth_track and _is_senior_title(title):
                 continue
 
-            job_type = _format_job_type(record.get("JobType"))
+            job_type = _format_job_type(record.get("jobType"))
             if not _is_contract_job(job_type):
                 continue
 
+            # The search results carry no description, so scoring waits until
+            # every cheap check above has passed.
+            record = {
+                **record,
+                "description": fetch_description(session, job_id, descriptions),
+            }
             matched_skills = score_record(record, track.skills)
             if len(matched_skills) < track.minimum_matches:
                 continue
@@ -449,35 +456,39 @@ def search_term(
             ):
                 continue
 
+            pay = record.get("payRate") or {}
             matches[job_id] = JobMatch(
                 job_id=job_id,
                 title=title,
-                city=str(record.get("City") or ""),
-                state=str(record.get("State") or ""),
-                is_remote=bool(record.get("IsRemoteJob")),
+                city=city,
+                state=state,
+                is_remote=bool(record.get("workRemote")),
                 job_type=job_type,
-                salary_low=float(record.get("SalaryLow") or 0),
-                salary_high=float(record.get("SalaryHigh") or 0),
-                industry=str(record.get("Industry") or ""),
-                url=slugify_job_url(record),
+                salary_low=float(pay.get("min") or 0),
+                salary_high=float(pay.get("max") or 0),
+                url=build_job_url(job_id),
                 track=track.name,
-                posted_date=format_posted_date(record.get("PostedDate")),
-                req_id=str(record.get("ReferenceID") or ""),
+                posted_date=format_posted_date(record.get("postedDate")),
                 matched_skills=matched_skills,
                 min_years=min_years,
             )
+
+        total_pages = (payload.get("pageMetadata") or {}).get("totalPages") or 1
+        if page >= total_pages:
+            break
         time.sleep(REQUEST_DELAY_SECONDS)
     return list(matches.values())
 
 
 def run_all_searches() -> list[JobMatch]:
-    all_matches: dict[int, JobMatch] = {}
+    all_matches: dict[str, JobMatch] = {}
+    descriptions: dict[str, str] = {}
     with requests.Session() as session:
         session.headers.update(HEADERS)
         for track in TRACKS:
             for term in track.terms:
                 print(f"Searching [{track.name}]: {term!r} ...")
-                for job in search_term(session, term, track):
+                for job in search_term(session, term, track, descriptions):
                     existing = all_matches.get(job.job_id)
                     if existing is None or job.score > existing.score:
                         all_matches[job.job_id] = job
@@ -497,80 +508,6 @@ def run_all_searches() -> list[JobMatch]:
         return order, inverted_date
 
     return sorted(all_matches.values(), key=sort_key)
-
-
-def _github_state_config() -> tuple[str, str, str] | None:
-    token = os.environ.get("IG_GITHUB_TOKEN")
-    repo = os.environ.get("IG_GITHUB_REPO")
-    if bool(token) != bool(repo):
-        raise RuntimeError(
-            "IG_GITHUB_TOKEN and IG_GITHUB_REPO must be set together"
-        )
-    if not token or not repo:
-        return None
-    return token, repo, os.environ.get("IG_GIT_BRANCH", "main")
-
-
-def _github_state_request(method: str, **kwargs: Any) -> requests.Response:
-    config = _github_state_config()
-    if config is None:
-        raise RuntimeError("GitHub state storage is not configured")
-    token, repo, _ = config
-    url = f"https://api.github.com/repos/{repo}/contents/{STATE_FILE.name}"
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {token}",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    return requests.request(method, url, headers=headers, timeout=20, **kwargs)
-
-
-def load_seen_ids() -> set[int]:
-    config = _github_state_config()
-    if config is not None:
-        _, _, branch = config
-        response = _github_state_request("GET", params={"ref": branch})
-        if response.status_code == 404:
-            return set()
-        response.raise_for_status()
-        content = base64.b64decode(response.json()["content"]).decode("utf-8")
-    elif STATE_FILE.exists():
-        content = STATE_FILE.read_text(encoding="utf-8")
-    else:
-        return set()
-
-    data = json.loads(content)
-    if not isinstance(data, list) or not all(isinstance(item, int) for item in data):
-        raise ValueError(f"{STATE_FILE.name} must contain a JSON array of job IDs")
-    return set(data)
-
-
-def save_seen_ids(ids: set[int]) -> None:
-    content = json.dumps(sorted(ids), indent=2) + "\n"
-    config = _github_state_config()
-    if config is not None:
-        _, _, branch = config
-        current = _github_state_request("GET", params={"ref": branch})
-        if current.status_code not in (200, 404):
-            current.raise_for_status()
-        payload: dict[str, Any] = {
-            "message": f"Update seen jobs - {datetime.now():%Y-%m-%d %H:%M}",
-            "content": base64.b64encode(content.encode()).decode("ascii"),
-            "branch": branch,
-        }
-        if current.status_code == 200:
-            payload["sha"] = current.json()["sha"]
-        response = _github_state_request("PUT", json=payload)
-        response.raise_for_status()
-        print(f"Updated {STATE_FILE.name} on GitHub.")
-        return
-
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=STATE_FILE.parent, delete=False
-    ) as temporary:
-        temporary.write(content)
-        temporary_path = Path(temporary.name)
-    temporary_path.replace(STATE_FILE)
 
 
 def format_salary(job: JobMatch) -> str:
@@ -611,11 +548,6 @@ def build_email_body(jobs: list[JobMatch]) -> str:
             if job.posted_date
             else ""
         )
-        req = (
-            f" &nbsp;|&nbsp; Req: {html_module.escape(job.req_id)}"
-            if job.req_id
-            else ""
-        )
         lines.append(
             f'<p><a href="{html_module.escape(job.url)}">'
             f"{html_module.escape(job.title)}</a> "
@@ -625,34 +557,66 @@ def build_email_body(jobs: list[JobMatch]) -> str:
             f" &nbsp;|&nbsp; {html_module.escape(format_salary(job))}"
             f" &nbsp;|&nbsp; {html_module.escape(years)}"
             f"{posted}"
-            f" &nbsp;|&nbsp; Job ID: {job.job_id}"
-            f"{req}</p>"
+            f" &nbsp;|&nbsp; Job ID: {html_module.escape(job.job_id)}</p>"
         )
     lines.append("</body></html>")
     return "\n".join(lines)
 
 
-def main() -> None:
-    seen_ids = load_seen_ids()
+def main(store: FirestoreJobStore | None = None) -> None:
+    store = store or get_job_store()
+    print(f"Job state: {store.description}")
+    seen_ids = store.load_seen_ids()
+    unemailed_ids = store.load_unemailed_ids()
     all_matches = run_all_searches()
-    new_matches = [job for job in all_matches if job.job_id not in seen_ids]
+
+    brand_new = [job for job in all_matches if job.job_id not in seen_ids]
+    # Re-send anything a previous run saved but failed to email.
+    to_email = [
+        job for job in all_matches
+        if job.job_id not in seen_ids or job.job_id in unemailed_ids
+    ]
 
     print(f"\nTotal qualifying matches this run: {len(all_matches)}")
-    print(f"New (not previously emailed): {len(new_matches)}")
+    print(f"New (never seen before): {len(brand_new)}")
+    if len(to_email) > len(brand_new):
+        print(f"Retrying from an earlier failed email: {len(to_email) - len(brand_new)}")
 
-    if new_matches:
-        message_id = send_email(
-            get_gmail_service(),
-            f"Insight Global: {len(new_matches)} new job match(es)",
-            build_email_body(new_matches),
-            os.environ["IG_EMAIL_TO"],
-            html=True,
-        )
+    # Save first so nothing is lost if Gmail fails; new jobs start as
+    # "unemailed" and flip to "emailed" below once the digest is accepted.
+    store.save_matches(all_matches, new_ids={job.job_id for job in brand_new})
+    print(f"Saved {len(all_matches)} match(es).")
+
+    message_id: str | None = None
+    if to_email:
+        try:
+            message_id = send_email(
+                get_gmail_service(),
+                f"Insight Global: {len(to_email)} new job match(es)",
+                build_email_body(to_email),
+                os.environ["IG_EMAIL_TO"],
+                html=True,
+            )
+        except Exception as error:
+            store.log_run(
+                total_matches=len(all_matches),
+                new_job_ids=sorted(job.job_id for job in to_email),
+                email_sent=False,
+                error=f"{type(error).__name__}: {error}",
+            )
+            print(f"Email failed; {len(to_email)} job(s) left as 'unemailed' for next run.")
+            raise
+        store.mark_emailed([job.job_id for job in to_email], message_id)
         print(f"Email sent ({message_id}).")
     else:
         print("Nothing new to email.")
 
-    save_seen_ids(seen_ids | {job.job_id for job in all_matches})
+    store.log_run(
+        total_matches=len(all_matches),
+        new_job_ids=sorted(job.job_id for job in to_email),
+        email_sent=message_id is not None,
+        gmail_message_id=message_id,
+    )
 
 
 if __name__ == "__main__":

@@ -12,11 +12,11 @@ services:
         value: /etc/secrets/credentials.json
       - key: GMAIL_TOKEN_PATH
         value: /etc/secrets/token.json
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /etc/secrets/firebase-service-account.json
+      # Fail loudly if the key file is missing instead of silently writing to
+      # a throwaway local_firestore.json on the cron host.
+      - key: IG_STATE_BACKEND
+        value: firestore
       - key: IG_EMAIL_TO
         sync: false
-      - key: IG_GITHUB_TOKEN
-        sync: false
-      - key: IG_GITHUB_REPO
-        sync: false
-      - key: IG_GIT_BRANCH
-        value: main

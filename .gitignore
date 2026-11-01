@@ -153,6 +153,8 @@ activemq-data/
 .DS_Store
 credentials.json
 token.json
+firebase-service-account.json
+*-firebase-adminsdk-*.json
 .venv
 env/
 venv/
