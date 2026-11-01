@@ -8,7 +8,8 @@ def test_build_search_params_targets_remote_active_jobs():
         "keyword": "Python Developer",
         "page": 2,
         "size": 50,
-        "sort": "relevance,desc",
+        "sort": "postedDate,desc",
+        "filter.jobType": "Contract",
         "filter.includeOnlyRemoteWork": "true",
         "filter.distance": 5,
         "filter.status": "active",
@@ -465,3 +466,72 @@ def test_search_term_stops_on_empty_page(no_delay):
     session = FakeSession([_page([])], {})
 
     assert job_search.search_term(session, "Python Developer", CORE_TRACK) == []
+
+
+def test_search_term_stops_paging_once_a_page_reaches_stale_postings(
+    no_delay, monkeypatch
+):
+    monkeypatch.setattr(job_search, "MAX_PAGES_PER_SEARCH", 5)
+    fresh = _api_job("fresh")
+    old = _api_job("old", postedDate="2020-01-01T00:00:00.1Z")
+    session = FakeSession(
+        [
+            _page([fresh], number=1, total_pages=9),
+            _page([fresh, old], number=2, total_pages=9),
+            _page([_api_job("never-fetched")], number=3, total_pages=9),
+        ],
+        {"fresh": "Python React"},
+    )
+
+    matches = job_search.search_term(session, "Python Developer", CORE_TRACK)
+
+    assert [m.job_id for m in matches] == ["fresh"]
+    page_calls = [p["page"] for url, p in session.calls if not url.endswith("/details")]
+    assert page_calls == [1, 2]
+
+
+def test_is_stale_page_ignores_undated_records():
+    stale = {"postedDate": "2020-01-01T00:00:00.1Z"}
+    fresh = {"postedDate": "2099-01-01T00:00:00.1Z"}
+
+    assert job_search._is_stale_page([fresh, stale, {}]) is True
+    assert job_search._is_stale_page([stale, fresh]) is False
+    assert job_search._is_stale_page([{}]) is False
+    assert job_search._is_stale_page([]) is False
+
+
+def test_build_session_retries_connection_errors_and_server_errors():
+    session = job_search.build_session()
+    retry = session.get_adapter("https://insightglobal.com").max_retries
+
+    assert retry.total == job_search.RETRY_ATTEMPTS
+    assert 503 in retry.status_forcelist
+    assert session.headers["User-Agent"] == job_search.HEADERS["User-Agent"]
+
+
+def test_run_all_searches_skips_a_failing_term_but_keeps_the_rest(monkeypatch, capsys):
+    monkeypatch.setattr(job_search, "REQUEST_DELAY_SECONDS", 0)
+
+    def fake_search(session, term, track, descriptions):
+        if term == "Software Engineer":
+            raise job_search.requests.ConnectionError("dropped")
+        return [_job("kept")] if term == "Python Developer" else []
+
+    monkeypatch.setattr(job_search, "search_term", fake_search)
+
+    jobs = job_search.run_all_searches()
+
+    assert [j.job_id for j in jobs] == ["kept"]
+    assert "'Software Engineer'" in capsys.readouterr().out
+
+
+def test_run_all_searches_raises_when_every_term_fails(monkeypatch):
+    monkeypatch.setattr(job_search, "REQUEST_DELAY_SECONDS", 0)
+
+    def always_fail(*args, **kwargs):
+        raise job_search.requests.ConnectionError("down")
+
+    monkeypatch.setattr(job_search, "search_term", always_fail)
+
+    with pytest.raises(RuntimeError, match="Every search failed"):
+        job_search.run_all_searches()

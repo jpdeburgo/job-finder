@@ -13,6 +13,8 @@ from urllib.parse import urljoin
 
 import requests
 from dotenv import load_dotenv
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from gmail_client import get_gmail_service, send_email
 from job_store import FirestoreJobStore, get_job_store
@@ -166,7 +168,10 @@ GROWTH_TRACK_MAX_YEARS_EXPERIENCE = 3
 MAX_YEARS_EXPERIENCE = 7
 MAX_POSTED_AGE_DAYS = 30
 REMOTE_ONLY = True
-MAX_PAGES_PER_SEARCH = 3
+# Safety cap only: results are sorted newest-first and paging stops on its own
+# once a page reaches postings older than MAX_POSTED_AGE_DAYS.
+MAX_PAGES_PER_SEARCH = 10
+RETRY_ATTEMPTS = 4
 PAGE_SIZE = 50  # the API silently caps page size at 50
 CONTRACT_JOB_TYPES = {"contract", "contract to perm", "contract-to-perm"}
 REQUEST_DELAY_SECONDS = 1.5
@@ -258,7 +263,10 @@ def build_search_params(term: str, page: int) -> dict[str, Any]:
         "keyword": term,
         "page": page,
         "size": PAGE_SIZE,
-        "sort": "relevance,desc",
+        "sort": "postedDate,desc",
+        # Matches Contract, Contract To Perm and "Contract, perm possible", and
+        # drops Perm. Only one value works: the API 500s on a list of types.
+        "filter.jobType": "Contract",
         "filter.includeOnlyRemoteWork": "true" if REMOTE_ONLY else "false",
         "filter.distance": 5,
         "filter.status": "active",
@@ -372,6 +380,30 @@ def _is_stale_posting(value: Any) -> bool:
     return (datetime.now(timezone.utc) - parsed).days > MAX_POSTED_AGE_DAYS
 
 
+def build_session() -> requests.Session:
+    """Return a session that retries dropped connections and 5xx/429 responses."""
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    retry = Retry(
+        total=RETRY_ATTEMPTS,
+        backoff_factor=2,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    return session
+
+
+def _is_stale_page(records: list[dict[str, Any]]) -> bool:
+    """Return True when a newest-first page has reached stale postings.
+
+    Records without a postedDate are ignored; the oldest dated record on the
+    page decides, because everything on later pages is older still.
+    """
+    dated = [r for r in records if _parse_posted_date(r.get("postedDate"))]
+    return bool(dated) and _is_stale_posting(dated[-1]["postedDate"])
+
+
 def fetch_job_page(session: requests.Session, term: str, page: int) -> dict[str, Any]:
     response = session.get(API_URL, params=build_search_params(term, page), timeout=20)
     response.raise_for_status()
@@ -474,7 +506,7 @@ def search_term(
             )
 
         total_pages = (payload.get("pageMetadata") or {}).get("totalPages") or 1
-        if page >= total_pages:
+        if page >= total_pages or _is_stale_page(records):
             break
         time.sleep(REQUEST_DELAY_SECONDS)
     return list(matches.values())
@@ -483,16 +515,30 @@ def search_term(
 def run_all_searches() -> list[JobMatch]:
     all_matches: dict[str, JobMatch] = {}
     descriptions: dict[str, str] = {}
-    with requests.Session() as session:
-        session.headers.update(HEADERS)
+    failed_terms: list[str] = []
+    total_terms = sum(len(track.terms) for track in TRACKS)
+    with build_session() as session:
         for track in TRACKS:
             for term in track.terms:
                 print(f"Searching [{track.name}]: {term!r} ...")
-                for job in search_term(session, term, track, descriptions):
+                try:
+                    found = search_term(session, term, track, descriptions)
+                except requests.RequestException as error:
+                    # Retries are already exhausted; skip this term rather
+                    # than lose every other term's matches (and the email).
+                    print(f"  FAILED, skipping: {type(error).__name__}: {error}")
+                    failed_terms.append(term)
+                    continue
+                for job in found:
                     existing = all_matches.get(job.job_id)
                     if existing is None or job.score > existing.score:
                         all_matches[job.job_id] = job
                 time.sleep(REQUEST_DELAY_SECONDS)
+
+    if len(failed_terms) == total_terms:
+        raise RuntimeError("Every search failed; Insight Global may be unreachable.")
+    if failed_terms:
+        print(f"WARNING: {len(failed_terms)} search(es) failed: {failed_terms}")
 
     track_order = {track.name: index for index, track in enumerate(TRACKS)}
 
