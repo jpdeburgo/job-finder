@@ -155,6 +155,7 @@ credentials.json
 token.json
 firebase-service-account.json
 *-firebase-adminsdk-*.json
+local_firestore.json
 .venv
 env/
 venv/
