@@ -156,6 +156,10 @@ token.json
 firebase-service-account.json
 *-firebase-adminsdk-*.json
 local_firestore.json
+# Any env file (.env.local, .env.production, ...) except the committed template.
+.env.*
+!.env.example
+*service-account*.json
 .venv
 env/
 venv/
@@ -222,3 +226,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node / Next.js (dashboard/)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+.vercel/
+
+# Firebase emulator state and logs (firebase.json, emulator exports)
+.firebase/
+emulator-data/
+.emulator-data/
+firebase-export-*/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+pubsub-debug.log*
