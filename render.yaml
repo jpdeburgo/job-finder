@@ -2,6 +2,9 @@ services:
   - type: cron
     name: insight-global-job-search
     runtime: python
+    # The search script lives in backend/; the Next.js dashboard in frontend/
+    # is not deployed by this Blueprint.
+    rootDir: backend
     schedule: "0 13 * * *"
     buildCommand: pip install pipenv && pipenv install --system --deploy
     startCommand: python -u job_search.py

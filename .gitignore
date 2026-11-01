@@ -156,6 +156,8 @@ token.json
 firebase-service-account.json
 *-firebase-adminsdk-*.json
 local_firestore.json
+# ...except the small, fake one the frontend tests run against.
+!frontend/src/test/fixtures/local_firestore.json
 # Any env file (.env.local, .env.production, ...) except the committed template.
 .env.*
 !.env.example
@@ -227,13 +229,17 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Node / Next.js (dashboard/)
+# Node / Next.js (frontend/)
 node_modules/
 .next/
 out/
 *.tsbuildinfo
 next-env.d.ts
 .vercel/
+coverage/
+
+# Archives written by archive.py
+job-finder-*.zip
 
 # Firebase emulator state and logs (firebase.json, emulator exports)
 .firebase/

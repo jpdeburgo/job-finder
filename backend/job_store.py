@@ -39,7 +39,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 # Workflow statuses. A job is saved as "unemailed" the moment it matches, flips
 # to "emailed" once Gmail accepts the digest, and everything after that is set
-# by you (jobs_cli.py or the Firebase console).
+# by you (the ../frontend dashboard, jobs_cli.py, or the Firebase console).
+# Keep in sync with JOB_STATUSES in ../frontend/src/lib/types.ts.
 STATUS_UNEMAILED = "unemailed"  # matched and saved, but the digest wasn't sent yet
 STATUS_EMAILED = "emailed"
 STATUS_APPLIED = "applied"
@@ -62,6 +63,9 @@ JOB_STATUSES = (
 DEFAULT_JOBS_COLLECTION = "jobs"
 DEFAULT_RUNS_COLLECTION = "runs"
 DEFAULT_LOCAL_DB_PATH = Path(__file__).with_name("local_firestore.json")
+# Optional override for the stand-in's location. The Next.js dashboard in
+# ../frontend reads the same variable, so both sides agree on one file.
+LOCAL_DB_PATH_ENV_VAR = "IG_LOCAL_DB_PATH"
 # Firestore caps a batched write at 500 operations; stay comfortably under it.
 FIRESTORE_BATCH_SIZE = 400
 # Environment variables that indicate real Firebase credentials are available.
@@ -75,6 +79,15 @@ FIREBASE_ENV_VARS = (
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def local_db_path(override: Path | str | None = None) -> Path:
+    """Return the stand-in's path: explicit argument, then ``IG_LOCAL_DB_PATH``,
+    then ``local_firestore.json`` next to this module."""
+    if override:
+        return Path(override)
+    configured = os.environ.get(LOCAL_DB_PATH_ENV_VAR, "").strip()
+    return Path(configured) if configured else DEFAULT_LOCAL_DB_PATH
 
 
 def job_document(job: "JobMatch") -> dict[str, Any]:
@@ -154,7 +167,7 @@ class FirestoreJobStore:
     @classmethod
     def local(cls, path: Path | None = None, verbose: bool = True) -> "FirestoreJobStore":
         """Use the JSON-file stand-in instead of Firebase."""
-        client = LocalFirestoreClient(path or DEFAULT_LOCAL_DB_PATH, verbose=verbose)
+        client = LocalFirestoreClient(local_db_path(path), verbose=verbose)
         return cls(client, **cls._collection_names())
 
     @staticmethod
@@ -579,7 +592,7 @@ def get_job_store(local_path: Path | None = None, verbose: bool = True) -> Fires
         if backend == "local" and verbose:
             print(
                 "Firebase is not configured; using the local Firestore stand-in "
-                f"({(local_path or DEFAULT_LOCAL_DB_PATH).name}). "
+                f"({local_db_path(local_path).name}). "
                 "Set GOOGLE_APPLICATION_CREDENTIALS to use the real database."
             )
     if backend == "firestore":
