@@ -6,6 +6,7 @@ export function makeJob(overrides: Partial<Job> = {}): Job {
   return {
     id,
     job_id: id,
+    company: "Insight Global",
     title: "React Developer",
     city: "Austin",
     state: "TX",
@@ -29,29 +30,4 @@ export function makeJob(overrides: Partial<Job> = {}): Job {
     gmail_message_id: "19a1b2c3d4e5f607",
     ...overrides,
   };
-}
-
-/** A bare ID imported from the old seen_jobs.json (no title, no URL). */
-export function makeLegacyJob(id = "554576"): Job {
-  return makeJob({
-    id,
-    job_id: id,
-    title: null,
-    city: null,
-    state: null,
-    is_remote: null,
-    job_type: null,
-    salary_low: null,
-    salary_high: null,
-    url: null,
-    track: null,
-    posted_date: null,
-    matched_skills: [],
-    score: null,
-    min_years: null,
-    status: "seen",
-    notes: "Imported from seen_jobs.json",
-    emailed_at: null,
-    gmail_message_id: null,
-  });
 }

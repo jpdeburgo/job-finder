@@ -15,10 +15,10 @@ import {
   formatYears,
   gmailMessageUrl,
   insightGlobalSearchUrl,
-  isLegacyImport,
 } from "@/lib/jobs";
 import type { Job, JobStatus } from "@/lib/types";
 import { ExternalLink } from "./ExternalLink";
+import { RemoteLabel } from "./RemoteLabel";
 import { StatusBadge } from "./StatusBadge";
 
 interface Props {
@@ -59,7 +59,6 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave }: Props) {
   const dirty = notes.trim() !== (job.notes ?? "").trim();
   const gmail = gmailMessageUrl(job.gmail_message_id);
   const search = insightGlobalSearchUrl(job.title);
-  const legacy = isLegacyImport(job);
 
   const save = async () => {
     setSaving(true);
@@ -75,11 +74,7 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave }: Props) {
       <SheetHeader>
         <div className="flex items-center gap-2 pr-6">
           <StatusBadge status={job.status} />
-          {job.is_remote && (
-            <Badge variant="outline" className="text-green-700 dark:text-green-400">
-              Remote
-            </Badge>
-          )}
+          <RemoteLabel job={job} badge />
         </div>
         <SheetTitle className="text-lg leading-snug">
           {job.url ? (
@@ -87,13 +82,11 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave }: Props) {
               {job.title ?? job.job_id}
             </ExternalLink>
           ) : (
-            (job.title ?? `Imported ID ${job.job_id}`)
+            (job.title ?? job.job_id)
           )}
         </SheetTitle>
         <SheetDescription>
-          {legacy
-            ? "Imported from the old seen_jobs.json list; no details were captured for this ID."
-            : [formatLocation(job), job.job_type, formatSalary(job)].filter(Boolean).join(" · ")}
+          {[job.company, formatLocation(job), job.job_type, formatSalary(job)].filter(Boolean).join(" · ")}
         </SheetDescription>
       </SheetHeader>
 
@@ -109,7 +102,7 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave }: Props) {
           )}
           <Button
             variant="outline"
-            disabled={busy || legacy || job.status === "applied"}
+            disabled={busy || job.status === "applied"}
             onClick={() => onStatusChange("applied")}
           >
             <CheckIcon />
@@ -117,7 +110,7 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave }: Props) {
           </Button>
           <Button
             variant="outline"
-            disabled={busy || legacy || job.status === "interviewing"}
+            disabled={busy || job.status === "interviewing"}
             onClick={() => onStatusChange("interviewing")}
           >
             Interviewing

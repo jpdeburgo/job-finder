@@ -84,3 +84,14 @@ def test_save_token_does_not_hide_other_write_errors(monkeypatch):
 
     with pytest.raises(OSError, match="No space left"):
         _save_token(Path("/tmp/token.json"), credentials)
+
+
+def test_missing_client_secret_raises_not_configured(tmp_path, monkeypatch):
+    from gmail_client import GmailNotConfiguredError, get_gmail_service
+
+    monkeypatch.setenv("GMAIL_CREDENTIALS_PATH", str(tmp_path / "credentials.json"))
+    monkeypatch.setenv("GMAIL_TOKEN_PATH", str(tmp_path / "token.json"))
+
+    with pytest.raises(GmailNotConfiguredError, match="client secret not found"):
+        get_gmail_service()
+    assert issubclass(GmailNotConfiguredError, FileNotFoundError)  # old handlers still work

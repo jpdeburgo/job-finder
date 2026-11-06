@@ -1,0 +1,13 @@
+Task brief · for the reviewer
+Task description *
+What you are trying to get done in this session, for a reviewer who was not there.
+
+I want the backend script to be able to look through Accenture's job site. Eventually, I plan on making this project be able to search through any job site with the user being able to add the sites or companies they want to apply to. Maybe the app will have a database of companies and already know their sites. I added an ACCENTURE_SEARCH_URL variable. I want to start using it when doing the job search. The point is to be able to search both insight global and Accenture
+How to judge completion *
+What a correct result looks like, for a reviewer who was not there: where to look (a command to run, a file, a feature to try), what to look for, and what counts as a pass.
+
+This will be complete when the app can search Accenture for jobs. You can check by running pipenv run python job_search.py. Once that finishes, local_firestore.json should be filled with Accenture and Insight Global jobs
+
+
+Next Prompt:
+Add a filter for company in the UI

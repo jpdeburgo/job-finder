@@ -5,15 +5,17 @@ Examples::
     python jobs_cli.py help                    # every command and its usage
     python jobs_cli.py list                    # newest jobs first
     python jobs_cli.py list --status emailed   # jobs you haven't acted on yet
-    python jobs_cli.py show 6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba
-    python jobs_cli.py applied 6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba --note "Applied via IG site"
-    python jobs_cli.py skip 6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba
-    python jobs_cli.py status 6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba interviewing
-    python jobs_cli.py migrate seen_jobs.json          # import the old ID list
+    python jobs_cli.py show insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba
+    python jobs_cli.py applied accenture-R00212345 --note "Applied via IG site"
+    python jobs_cli.py skip insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba
+    python jobs_cli.py status insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba interviewing
     python jobs_cli.py migrate local_firestore.json    # copy local data to Firebase
 
 Without Firebase credentials, everything is read from and written to
-local_firestore.json (see job_store.py).
+local_firestore.json (see job_store.py). Add --local to use that file even
+when Firebase is configured, e.g. after `python job_search.py --local`:
+
+    python jobs_cli.py list --local
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from dotenv import load_dotenv
 
 from job_store import (
     DEFAULT_JOBS_COLLECTION,
+    DEFAULT_LOCAL_DB_PATH,
     JOB_STATUSES,
     STATUS_APPLIED,
     STATUS_SKIPPED,
@@ -39,7 +42,6 @@ from job_store import (
 
 load_dotenv()
 
-DEFAULT_LEGACY_FILE = Path(__file__).with_name("seen_jobs.json")
 Command = Callable[[FirestoreJobStore, argparse.Namespace], int]
 
 
@@ -67,7 +69,7 @@ def _print_table(jobs: list[dict[str, Any]]) -> None:
             f"{str(job.get('status', '-')):<12} "
             f"{_fmt_time(job.get('last_seen_at')):<10} "
             f"{str(job.get('posted_date') or '-'):<10} "
-            f"{job.get('title') or '(no details - imported ID)'}"
+            f"{job.get('title') or '(no title)'}"
         )
 
 
@@ -116,18 +118,12 @@ def cmd_status(store: FirestoreJobStore, args: argparse.Namespace) -> int:
 
 
 def cmd_migrate(store: FirestoreJobStore, args: argparse.Namespace) -> int:
-    """Import an old seen_jobs.json ID list or a local_firestore.json snapshot."""
+    """Copy the jobs in a local_firestore.json snapshot into the store."""
     path = Path(args.path)
     if not path.exists():
         print(f"{path} does not exist.", file=sys.stderr)
         return 1
     data = json.loads(path.read_text(encoding="utf-8"))
-
-    if isinstance(data, list):  # legacy seen_jobs.json: bare job IDs
-        ids = [str(item) for item in data]
-        added = store.import_legacy_ids(ids)
-        print(f"Imported {added} new job ID(s) from {path.name} ({len(ids) - added} already present).")
-        return 0
 
     if isinstance(data, dict) and isinstance(data.get(DEFAULT_JOBS_COLLECTION), dict):
         documents = data[DEFAULT_JOBS_COLLECTION]
@@ -139,7 +135,7 @@ def cmd_migrate(store: FirestoreJobStore, args: argparse.Namespace) -> int:
         return 0
 
     print(
-        f"{path} is neither a list of job IDs nor a local_firestore.json file.",
+        f"{path} is not a local_firestore.json file (no {DEFAULT_JOBS_COLLECTION!r} collection).",
         file=sys.stderr,
     )
     return 1
@@ -185,9 +181,17 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p.add_argument("status", choices=JOB_STATUSES)
     p.add_argument("--note")
 
-    p = add("migrate", "import seen_jobs.json IDs or a local_firestore.json file", cmd_migrate)
-    p.add_argument("path", nargs="?", default=str(DEFAULT_LEGACY_FILE))
+    p = add("migrate", "copy a local_firestore.json file's jobs into the database", cmd_migrate)
+    p.add_argument("path", nargs="?", default=str(DEFAULT_LOCAL_DB_PATH))
 
+    local_help = "use local_firestore.json (or IG_LOCAL_DB_PATH) instead of Firebase"
+    parser.add_argument("--local", action="store_true", help=local_help)
+    for subparser in commands.values():
+        # Accept it after the command too; SUPPRESS keeps the subcommand's
+        # default from overwriting a --local given before the command.
+        subparser.add_argument(
+            "--local", action="store_true", default=argparse.SUPPRESS, help=local_help
+        )
     return parser, commands
 
 
@@ -210,7 +214,11 @@ def main(argv: list[str] | None = None, store: FirestoreJobStore | None = None) 
     if store is None:
         # Quiet mode: the per-call "[local firestore] ..." trace is for the
         # search script; here one line saying which database is enough.
-        store = get_job_store(verbose=False)
+        store = (
+            FirestoreJobStore.local(verbose=False)
+            if args.local
+            else get_job_store(verbose=False)
+        )
         print(f"# {store.description}", file=sys.stderr)
     return args.func(store, args)
 

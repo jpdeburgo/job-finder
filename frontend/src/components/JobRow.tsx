@@ -4,10 +4,11 @@ import { CheckIcon, PanelRightOpenIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { formatDate, formatLocation, formatSalary, hasApplied, isLegacyImport, trackLabel } from "@/lib/jobs";
+import { formatDate, formatLocation, formatSalary, hasApplied, trackLabel } from "@/lib/jobs";
 import type { Job, JobStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ExternalLink } from "./ExternalLink";
+import { RemoteLabel } from "./RemoteLabel";
 import { StatusSelect } from "./StatusSelect";
 
 interface Props {
@@ -19,7 +20,6 @@ interface Props {
 }
 
 export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props) {
-  const legacy = isLegacyImport(job);
   const applied = hasApplied(job);
   const name = job.title ?? job.job_id;
 
@@ -43,13 +43,12 @@ export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props)
             {name}
           </ExternalLink>
         ) : (
-          <span className={legacy ? "text-muted-foreground italic" : "font-medium"}>
-            {job.title ?? `Imported ID ${job.job_id} (no details)`}
-          </span>
+          <span className="font-medium">{name}</span>
         )}
         <div className="text-muted-foreground mt-0.5 flex flex-wrap gap-x-2 text-xs">
+          {job.company && <span className="text-foreground font-medium">{job.company}</span>}
           <span>{formatLocation(job)}</span>
-          {job.is_remote && <span className="text-green-700 dark:text-green-400">Remote</span>}
+          <RemoteLabel job={job} />
           {job.job_type && <span>{job.job_type}</span>}
         </div>
       </TableCell>
@@ -74,7 +73,7 @@ export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props)
         )}
       </TableCell>
 
-      <TableCell className={legacy ? "text-muted-foreground" : undefined}>{legacy ? "—" : formatSalary(job)}</TableCell>
+      <TableCell>{formatSalary(job)}</TableCell>
       <TableCell className="text-muted-foreground">{formatDate(job.posted_date)}</TableCell>
       <TableCell className="text-muted-foreground">{formatDate(job.last_seen_at)}</TableCell>
 
@@ -95,7 +94,7 @@ export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props)
           <Button
             variant="outline"
             size="sm"
-            disabled={busy || legacy}
+            disabled={busy}
             onClick={() => onStatusChange("applied")}
             className="text-green-700 dark:text-green-400"
           >

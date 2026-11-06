@@ -17,6 +17,10 @@ from googleapiclient.discovery import build
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
+class GmailNotConfiguredError(FileNotFoundError):
+    """Gmail hasn't been set up: there is no OAuth client secret to sign in with."""
+
+
 def _save_token(token_path: Path, credentials: Credentials) -> None:
     """Cache refreshed credentials unless the configured secret is read-only."""
     token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +53,7 @@ def get_gmail_service() -> Any:
             credentials.refresh(Request())
         else:
             if not credentials_path.exists():
-                raise FileNotFoundError(
+                raise GmailNotConfiguredError(
                     f"Gmail OAuth client secret not found at {credentials_path}. "
                     "See README.md for Gmail API setup."
                 )

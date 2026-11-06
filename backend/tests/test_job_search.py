@@ -1,10 +1,25 @@
 import pytest
 
 import job_search
+from job_sites import InsightGlobalSite, Posting
+
+IG = InsightGlobalSite(job_search.INSIGHT_GLOBAL_URL)
+
+
+def _posting(title="Python Engineer", description="", **overrides):
+    fields = dict(
+        job_id="p1",
+        title=title,
+        url="https://example.com/p1",
+        company="Example",
+        description=description,
+    )
+    fields.update(overrides)
+    return Posting(**fields)
 
 
 def test_build_search_params_targets_remote_active_jobs():
-    assert job_search.build_search_params("Python Developer", 2) == {
+    assert IG.build_search_params("Python Developer", 2) == {
         "keyword": "Python Developer",
         "page": 2,
         "size": 50,
@@ -17,32 +32,32 @@ def test_build_search_params_targets_remote_active_jobs():
 
 
 def test_api_and_job_urls_derive_from_the_search_page_url():
-    assert job_search.BASE_URL == "https://insightglobal.com/jobs/search/all/all"
-    assert job_search.API_URL == "https://insightglobal.com/all/jobs"
+    assert job_search.INSIGHT_GLOBAL_URL == "https://insightglobal.com/jobs/search/all/all"
+    assert IG.api_url == "https://insightglobal.com/all/jobs"
     assert (
-        job_search.build_job_url("6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba")
+        IG.build_job_url("6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba")
         == "https://insightglobal.com/jobs/6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba"
     )
 
 
-def test_html_to_text_strips_tags_and_entities():
-    assert (
-        job_search.html_to_text("Required<br><br>&bull; 5+ years of Python &amp; SQL<br>")
-        == "Required \u2022 5+ years of Python & SQL"
-    )
-    assert job_search.html_to_text(None) == ""
+def test_job_search_urls_lists_insight_global_and_accenture():
+    assert job_search.JOB_SEARCH_URLS == [
+        "https://insightglobal.com/jobs/search/all/all",
+        "https://www.accenture.com/us-en/careers/jobsearch",
+    ]
+    assert job_search.ACCENTURE_SEARCH_URL in job_search.JOB_SEARCH_URLS
 
 
 def test_java_skill_does_not_match_javascript():
-    record = {"jobTitle": "JavaScript Engineer", "description": "Build React apps"}
+    posting = _posting("JavaScript Engineer", "Build React apps")
 
-    assert job_search.score_record(record, ("Java",)) == []
+    assert job_search.score_posting(posting, ("Java",)) == []
 
 
-def test_score_record_reads_title_and_description():
-    record = {"jobTitle": "Python Engineer", "description": "Build React apps on AWS"}
+def test_score_posting_reads_title_and_description():
+    posting = _posting("Python Engineer", "Build React apps on AWS")
 
-    assert job_search.score_record(record, ("Python", "React", "AWS", "Java")) == [
+    assert job_search.score_posting(posting, ("Python", "React", "AWS", "Java")) == [
         "Python",
         "React",
         "AWS",
@@ -50,38 +65,36 @@ def test_score_record_reads_title_and_description():
 
 
 def test_extract_min_years_uses_low_end_of_requirements():
-    record = {
-        "description": (
-            "3-5 years of experience with APIs. At least 7+ years experience overall"
-        ),
-    }
+    posting = _posting(
+        description="3-5 years of experience with APIs. At least 7+ years experience overall"
+    )
 
-    assert job_search.extract_min_years(record) == 3
+    assert job_search.extract_min_years(posting) == 3
 
 
 def test_extract_min_years_handles_words_between_years_and_experience():
     # Real Insight Global phrasing: filler words (and an N-M+ range) sit
     # between "years" and "experience" instead of directly adjacent to it.
-    record = {
-        "description": (
+    posting = _posting(
+        description=(
             "8-15+ years software engineering (fullstack, emphasis backend "
             "Python, .NET etc) delivering production-grade solutions. "
             "6-7+ years of hands-on Python backend development experience."
         ),
-    }
+    )
 
-    assert job_search.extract_min_years(record) == 6
+    assert job_search.extract_min_years(posting) == 6
 
 
 def test_extract_min_years_matches_real_concatenated_requirements_text():
-    record = {
-        "description": (
+    posting = _posting(
+        description=(
             "5+ years of software development experienceStrong backend "
             "development experience with Java"
         ),
-    }
+    )
 
-    assert job_search.extract_min_years(record) == 5
+    assert job_search.extract_min_years(posting) == 5
 
 
 def test_format_posted_date_converts_api_timestamp():
@@ -140,27 +153,29 @@ def gmail(monkeypatch):
 
 
 def test_main_emails_only_unseen_jobs_and_persists_state(store, gmail, monkeypatch):
-    store.import_legacy_ids(["id-1"])
+    store.save_matches([_job("id-1")], new_ids={"id-1"})  # found and emailed by an earlier run
+    store.mark_emailed(["id-1"], "earlier")
+    store.set_status("id-1", "applied")
     monkeypatch.setattr(
-        job_search, "run_all_searches", lambda: [_job("id-1"), _job("id-2")]
+        job_search, "run_all_searches", lambda *_: [_job("id-1"), _job("id-2")]
     )
 
     job_search.main(store)
 
     (subject, body, recipient) = gmail[0]
-    assert subject == "Insight Global: 1 new job match(es)"
+    assert subject == "Job search: 1 new job match(es)"
     assert "/jobs/id-2" in body and "/jobs/id-1" not in body
     assert recipient == "me@example.com"
     assert store.load_seen_ids() == {"id-1", "id-2"}
     assert store.get_job("id-2")["status"] == "emailed"
     assert store.get_job("id-2")["gmail_message_id"] == "msg-1"
-    assert store.get_job("id-1")["status"] == "seen"  # untouched by re-seeing it
+    assert store.get_job("id-1")["status"] == "applied"  # untouched by re-seeing it
 
 
 def test_main_saves_unemailed_jobs_when_email_fails_and_retries_next_run(
     store, gmail, monkeypatch
 ):
-    monkeypatch.setattr(job_search, "run_all_searches", lambda: [_job("id-2")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-2")])
 
     def failing_send(*args, **kwargs):
         raise RuntimeError("gmail down")
@@ -175,7 +190,7 @@ def test_main_saves_unemailed_jobs_when_email_fails_and_retries_next_run(
 
     # Next run: Gmail works again, job 2 still matches alongside a new job 3.
     monkeypatch.setattr(
-        job_search, "run_all_searches", lambda: [_job("id-2"), _job("id-3")]
+        job_search, "run_all_searches", lambda *_: [_job("id-2"), _job("id-3")]
     )
 
     def working_send(service, subject, body, recipient, html=False):
@@ -186,7 +201,7 @@ def test_main_saves_unemailed_jobs_when_email_fails_and_retries_next_run(
     job_search.main(store)
 
     (subject, body, _) = gmail[-1]
-    assert subject == "Insight Global: 2 new job match(es)"
+    assert subject == "Job search: 2 new job match(es)"
     assert "/jobs/id-2" in body and "/jobs/id-3" in body
     assert store.get_job("id-2")["status"] == "emailed"
     assert store.get_job("id-3")["status"] == "emailed"
@@ -196,12 +211,84 @@ def test_main_saves_unemailed_jobs_when_email_fails_and_retries_next_run(
 def test_main_with_nothing_new_sends_no_email(store, gmail, monkeypatch):
     store.save_matches([_job("id-2")], new_ids={"id-2"})
     store.mark_emailed(["id-2"], "earlier")
-    monkeypatch.setattr(job_search, "run_all_searches", lambda: [_job("id-2")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-2")])
 
     job_search.main(store)
 
     assert gmail == []
     assert store.get_job("id-2")["gmail_message_id"] == "earlier"
+
+
+def _gmail_not_set_up():
+    raise job_search.GmailNotConfiguredError(
+        "Gmail OAuth client secret not found at credentials.json. See README.md for Gmail API setup."
+    )
+
+
+def test_main_without_gmail_set_up_prints_an_error_and_keeps_jobs(
+    store, gmail, monkeypatch, capsys
+):
+    monkeypatch.delenv("IG_REQUIRE_EMAIL", raising=False)
+    monkeypatch.setattr(job_search, "get_gmail_service", _gmail_not_set_up)
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1"), _job("id-2")])
+
+    job_search.main(store)  # no exception
+
+    out = capsys.readouterr().out
+    assert "Email is not set up, so no email was sent: Gmail OAuth client secret not found" in out
+    assert "2 job(s) stay 'unemailed'" in out
+    assert "Traceback" not in out
+    assert store.load_unemailed_ids() == {"id-1", "id-2"}
+    (run,) = [doc.to_dict() for doc in store._runs.stream()]
+    assert run["email_sent"] is False
+    assert run["error"].startswith("Email not set up: Gmail OAuth client secret not found")
+
+    # Once Gmail is set up, the next run emails everything that piled up.
+    monkeypatch.setattr(job_search, "get_gmail_service", lambda: "service")
+    job_search.main(store)
+
+    (subject, body, _) = gmail[-1]
+    assert subject == "Job search: 2 new job match(es)"
+    assert store.load_unemailed_ids() == set()
+
+
+def test_main_without_a_recipient_prints_an_error(store, gmail, monkeypatch, capsys):
+    monkeypatch.delenv("IG_REQUIRE_EMAIL", raising=False)
+    monkeypatch.delenv("IG_EMAIL_TO")
+    monkeypatch.setattr(
+        job_search, "get_gmail_service", lambda: pytest.fail("shouldn't sign in to Gmail")
+    )
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1")])
+
+    job_search.main(store)
+
+    assert "no email was sent: IG_EMAIL_TO is not set" in capsys.readouterr().out
+    assert store.load_unemailed_ids() == {"id-1"}
+    assert gmail == []
+
+
+def test_main_fails_when_email_is_required_but_not_set_up(store, gmail, monkeypatch):
+    monkeypatch.setenv("IG_REQUIRE_EMAIL", "true")  # as on Render
+    monkeypatch.setattr(job_search, "get_gmail_service", _gmail_not_set_up)
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1")])
+
+    with pytest.raises(job_search.GmailNotConfiguredError):
+        job_search.main(store)
+    assert store.load_unemailed_ids() == {"id-1"}
+
+
+def test_main_still_raises_when_gmail_is_set_up_but_fails(store, gmail, monkeypatch, capsys):
+    monkeypatch.delenv("IG_REQUIRE_EMAIL", raising=False)
+
+    def expired_token():
+        raise RuntimeError("token has been expired or revoked")
+
+    monkeypatch.setattr(job_search, "get_gmail_service", expired_token)
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1")])
+
+    with pytest.raises(RuntimeError, match="expired or revoked"):
+        job_search.main(store)
+    assert "Email failed; 1 job(s) left as 'unemailed'" in capsys.readouterr().out
 
 
 def test_growth_tracks_mirror_java_for_ios_and_dotnet():
@@ -312,6 +399,17 @@ def test_build_email_body_uses_hyperlink():
     assert "Job ID: 6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba" in body
 
 
+def test_build_email_body_flags_jobs_whose_remote_status_is_unknown():
+    body = job_search.build_email_body(
+        [_job("a", is_remote=True), _job("b", is_remote=None), _job("c", is_remote=False)]
+    )
+    lines = {job_id: line for job_id in "abc" for line in body.splitlines() if f"Job ID: {job_id}<" in line}
+
+    assert "&nbsp;|&nbsp; Remote &nbsp;|&nbsp;" in lines["a"]
+    assert "Remote not stated: check the posting" in lines["b"]
+    assert "Not remote" in lines["c"]
+
+
 # --- search_term against the JSON API -------------------------------------------------
 
 
@@ -369,7 +467,7 @@ def _page(jobs, number=1, total_pages=1):
 
 @pytest.fixture
 def no_delay(monkeypatch):
-    monkeypatch.setattr(job_search, "REQUEST_DELAY_SECONDS", 0)
+    monkeypatch.setattr(job_search, "MIN_SECONDS_BETWEEN_REQUESTS", 0)
 
 
 CORE_TRACK = job_search.TRACKS[0]
@@ -381,9 +479,9 @@ def test_search_term_builds_matches_from_api_records(no_delay):
         {"a": "<p>Python and React on AWS.<br>4+ years of experience.</p>"},
     )
 
-    (match,) = job_search.search_term(session, "Python Developer", CORE_TRACK)
+    (match,) = job_search.search_term(session, IG, "Python Developer", CORE_TRACK)
 
-    assert match.job_id == "a"
+    assert match.job_id == "insight-global-a"
     assert match.title == "Python Developer"
     assert (match.city, match.state) == ("Austin", "TX")
     assert match.url == "https://insightglobal.com/jobs/a"
@@ -411,9 +509,9 @@ def test_search_term_skips_jobs_failing_list_level_filters_without_fetching_deta
     ]
     session = FakeSession([_page(jobs)], {"keep": "Python and React"})
 
-    matches = job_search.search_term(session, "Python Developer", CORE_TRACK)
+    matches = job_search.search_term(session, IG, "Python Developer", CORE_TRACK)
 
-    assert [m.job_id for m in matches] == ["keep"]
+    assert [m.job_id for m in matches] == ["insight-global-keep"]
     assert session.detail_calls() == [
         "https://insightglobal.com/all/jobs/keep/details"
     ]
@@ -430,17 +528,17 @@ def test_search_term_applies_description_based_filters(no_delay):
         },
     )
 
-    matches = job_search.search_term(session, "Python Developer", CORE_TRACK)
+    matches = job_search.search_term(session, IG, "Python Developer", CORE_TRACK)
 
-    assert [m.job_id for m in matches] == ["ok"]
+    assert [m.job_id for m in matches] == ["insight-global-ok"]
 
 
 def test_search_term_fetches_each_description_once_across_searches(no_delay):
     session = FakeSession([_page([_api_job("a")])], {"a": "Python React"})
     descriptions = {}
 
-    job_search.search_term(session, "Python Developer", CORE_TRACK, descriptions)
-    job_search.search_term(session, "React Engineer", CORE_TRACK, descriptions)
+    job_search.search_term(session, IG, "Python Developer", CORE_TRACK, descriptions)
+    job_search.search_term(session, IG, "React Engineer", CORE_TRACK, descriptions)
 
     assert len(session.detail_calls()) == 1
 
@@ -455,9 +553,9 @@ def test_search_term_walks_pages_until_the_last_one(no_delay, monkeypatch):
         {"a": "Python React", "b": "Python React"},
     )
 
-    matches = job_search.search_term(session, "Python Developer", CORE_TRACK)
+    matches = job_search.search_term(session, IG, "Python Developer", CORE_TRACK)
 
-    assert [m.job_id for m in matches] == ["a", "b"]
+    assert [m.job_id for m in matches] == ["insight-global-a", "insight-global-b"]
     page_calls = [p["page"] for url, p in session.calls if not url.endswith("/details")]
     assert page_calls == [1, 2]
 
@@ -465,7 +563,7 @@ def test_search_term_walks_pages_until_the_last_one(no_delay, monkeypatch):
 def test_search_term_stops_on_empty_page(no_delay):
     session = FakeSession([_page([])], {})
 
-    assert job_search.search_term(session, "Python Developer", CORE_TRACK) == []
+    assert job_search.search_term(session, IG, "Python Developer", CORE_TRACK) == []
 
 
 def test_search_term_stops_paging_once_a_page_reaches_stale_postings(
@@ -483,20 +581,21 @@ def test_search_term_stops_paging_once_a_page_reaches_stale_postings(
         {"fresh": "Python React"},
     )
 
-    matches = job_search.search_term(session, "Python Developer", CORE_TRACK)
+    matches = job_search.search_term(session, IG, "Python Developer", CORE_TRACK)
 
-    assert [m.job_id for m in matches] == ["fresh"]
+    assert [m.job_id for m in matches] == ["insight-global-fresh"]
     page_calls = [p["page"] for url, p in session.calls if not url.endswith("/details")]
     assert page_calls == [1, 2]
 
 
 def test_is_stale_page_ignores_undated_records():
-    stale = {"postedDate": "2020-01-01T00:00:00.1Z"}
-    fresh = {"postedDate": "2099-01-01T00:00:00.1Z"}
+    stale = _posting(posted_date="2020-01-01T00:00:00.1Z")
+    fresh = _posting(posted_date="2099-01-01T00:00:00.1Z")
+    undated = _posting()
 
-    assert job_search._is_stale_page([fresh, stale, {}]) is True
+    assert job_search._is_stale_page([fresh, stale, undated]) is True
     assert job_search._is_stale_page([stale, fresh]) is False
-    assert job_search._is_stale_page([{}]) is False
+    assert job_search._is_stale_page([undated]) is False
     assert job_search._is_stale_page([]) is False
 
 
@@ -509,32 +608,59 @@ def test_build_session_retries_connection_errors_and_server_errors():
     assert session.headers["User-Agent"] == job_search.HEADERS["User-Agent"]
 
 
-def test_run_all_searches_skips_a_failing_term_but_keeps_the_rest(monkeypatch, capsys):
-    monkeypatch.setattr(job_search, "REQUEST_DELAY_SECONDS", 0)
-
-    def fake_search(session, term, track, descriptions):
-        if term == "Software Engineer":
+def _fake_list_postings(fail_terms=(), fail_all=False):
+    def fake(session, site, term):
+        if fail_all or term in fail_terms:
             raise job_search.requests.ConnectionError("dropped")
-        return [_job("kept")] if term == "Python Developer" else []
+        if site.name == "Insight Global" and term == "Python Developer":
+            return [
+                job_search.Posting(
+                    job_id="insight-global-kept",
+                    title="Python Developer",
+                    url="https://insightglobal.com/jobs/kept",
+                    company="Insight Global",
+                    is_remote=True,
+                    job_type="Contract",
+                    description="Python and React",
+                )
+            ]
+        return []
 
-    monkeypatch.setattr(job_search, "search_term", fake_search)
+    return fake
+
+
+def test_run_all_searches_skips_a_failing_term_but_keeps_the_rest(monkeypatch, capsys):
+    monkeypatch.setattr(job_search, "list_postings", _fake_list_postings({"Software Engineer"}))
 
     jobs = job_search.run_all_searches()
 
-    assert [j.job_id for j in jobs] == ["kept"]
-    assert "'Software Engineer'" in capsys.readouterr().out
+    assert [j.job_id for j in jobs] == ["insight-global-kept"]
+    out = capsys.readouterr().out
+    assert "Insight Global: search 'Software Engineer' FAILED" in out
+    assert "Accenture: search 'Software Engineer' FAILED" in out
+    assert "2 search(es) failed" in out
 
 
 def test_run_all_searches_raises_when_every_term_fails(monkeypatch):
-    monkeypatch.setattr(job_search, "REQUEST_DELAY_SECONDS", 0)
-
-    def always_fail(*args, **kwargs):
-        raise job_search.requests.ConnectionError("down")
-
-    monkeypatch.setattr(job_search, "search_term", always_fail)
+    monkeypatch.setattr(job_search, "list_postings", _fake_list_postings(fail_all=True))
 
     with pytest.raises(RuntimeError, match="Every search failed"):
         job_search.run_all_searches()
+
+
+def test_run_all_searches_only_searches_selected_sites(monkeypatch, capsys):
+    searched = []
+
+    def fake(session, site, term):
+        searched.append(site.name)
+        return []
+
+    monkeypatch.setattr(job_search, "list_postings", fake)
+
+    job_search.run_all_searches(["accenture"])
+
+    assert set(searched) == {"Accenture"}
+    assert len(searched) == sum(len(track.terms) for track in job_search.TRACKS)
 
 
 def test_core_track_requires_a_core_language_not_just_cloud_skills(no_delay):
@@ -550,9 +676,9 @@ def test_core_track_requires_a_core_language_not_just_cloud_skills(no_delay):
         },
     )
 
-    matches = job_search.search_term(session, "Python Developer", CORE_TRACK)
+    matches = job_search.search_term(session, IG, "Python Developer", CORE_TRACK)
 
-    assert [m.job_id for m in matches] == ["has-python"]
+    assert [m.job_id for m in matches] == ["insight-global-has-python"]
 
 
 def test_growth_tracks_do_not_require_a_core_language():

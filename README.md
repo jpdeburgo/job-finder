@@ -1,10 +1,10 @@
-# Insight Global Job Finder
+# Job Finder
 
 A personal job-hunting pipeline in two parts:
 
 | Directory | What it is | Docs |
 | --- | --- | --- |
-| [`backend/`](backend/) | Python script that searches Insight Global for matching remote contract roles, emails you a digest through the Gmail API, and records every match in Firebase Firestore (or a local JSON stand-in). Includes a CLI for updating statuses. Runs daily on Render. | [backend/README.md](backend/README.md) |
+| [`backend/`](backend/) | Python script that searches the careers pages in `JOB_SEARCH_URLS` (Insight Global contract roles and Accenture out of the box; Workday, Greenhouse, and Lever boards can be added by URL) for matching remote roles, emails you a digest through the Gmail API, and records every match in Firebase Firestore (or a local JSON stand-in). Includes a CLI for updating statuses. Runs daily on Render. | [backend/README.md](backend/README.md) |
 | [`frontend/`](frontend/) | Next.js + shadcn/ui dashboard over the same database: browse every job, search/filter/sort, change statuses, mark jobs applied, keep notes, and jump to the posting, the digest email, or an Insight Global search in a new tab. | [frontend/README.md](frontend/README.md) |
 
 Both halves choose the database the same way, from the same environment
@@ -19,6 +19,7 @@ at Firebase and the dashboard follows (it reads `backend/.env`).
 cd backend
 pipenv install --dev
 pipenv run python job_search.py          # needs Gmail credentials; see backend/README.md
+pipenv run python job_search.py --local --site accenture   # local file, one site
 pipenv run python jobs_cli.py list
 
 # Frontend: dashboard on http://localhost:3000
@@ -30,7 +31,7 @@ npm run dev
 ## Tests
 
 ```bash
-pytest                       # repo root: archive script + backend suite (needs backend deps)
+pytest                       # repo root: archive.py tests + backend suite (needs backend deps)
 cd backend && pipenv run pytest
 cd frontend && npm test      # vitest; add --coverage for a report
 ```
@@ -58,8 +59,8 @@ contains no secrets; use `--exclude` as above to leave it out.
 ├── archive.py            share-safe zip of the project
 ├── pytest.ini            runs tests/ and backend/tests together
 ├── render.yaml           Render cron Blueprint (rootDir: backend)
-├── tests/                tests for archive.py
-├── backend/              search script, job store, CLI, Python tests
+├── tests/                tests for archive.py only
+├── backend/              search script, job store, CLI, and their tests (backend/tests)
 └── frontend/             Next.js dashboard and its tests
 ```
 

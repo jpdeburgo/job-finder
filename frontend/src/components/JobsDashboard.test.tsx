@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Job, StoreInfo } from "@/lib/types";
-import { makeJob, makeLegacyJob } from "@/test/factories";
+import { makeJob } from "@/test/factories";
 import { setupUser } from "@/test/user";
 import { JobsDashboard } from "./JobsDashboard";
 
@@ -28,6 +28,8 @@ const python = makeJob({
 });
 const java = makeJob({
   id: "java",
+  company: "Accenture",
+  is_remote: null, // the site didn't say (saved by --include-unmarked)
   title: "Junior Java Developer",
   status: "skipped",
   track: "Java growth track (entry-level / lower bar)",
@@ -36,8 +38,7 @@ const java = makeJob({
   last_seen_at: "2026-10-29T13:00:05+00:00",
   gmail_message_id: null,
 });
-const legacy = makeLegacyJob("554576");
-const jobs: Job[] = [react, python, java, legacy];
+const jobs: Job[] = [react, python, java];
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -71,10 +72,24 @@ describe("rendering", () => {
     expect(screen.getByRole("status")).toHaveTextContent("local Firestore stand-in at /repo/backend/local_firestore.json");
   });
 
-  it("lists detailed jobs newest-first and hides legacy imports by default", () => {
+  it("lists jobs newest-first", () => {
     renderDashboard();
     expect(rowIds()).toEqual(["job-row-react", "job-row-python", "job-row-java"]);
-    expect(screen.getByText("4 tracked · 3 shown")).toBeInTheDocument();
+    expect(screen.getByText("3 tracked · 3 shown")).toBeInTheDocument();
+  });
+
+  it("shows each job's company", () => {
+    renderDashboard();
+    expect(row("java").getByText("Accenture")).toBeInTheDocument();
+    expect(row("react").getByText("Insight Global")).toBeInTheDocument();
+  });
+
+  it("flags jobs whose remote status the site didn't give", () => {
+    renderDashboard();
+    const unmarked = row("java").getByText("Remote not stated");
+    expect(unmarked).toHaveAttribute("title", expect.stringMatching(/Check the posting/));
+    expect(row("react").getByText("Remote")).toBeInTheDocument();
+    expect(row("react").queryByText("Remote not stated")).not.toBeInTheDocument();
   });
 
   it("links each job title to the posting in a new tab, safely", () => {
@@ -90,7 +105,6 @@ describe("rendering", () => {
     expect(chips().getByRole("radio", { name: /Emailed 1/ })).toBeInTheDocument();
     expect(chips().getByRole("radio", { name: /Applied 1/ })).toBeInTheDocument();
     expect(chips().getByRole("radio", { name: /Skipped 1/ })).toBeInTheDocument();
-    expect(chips().getByRole("radio", { name: /Seen 1/ })).toBeInTheDocument();
   });
 
   it("renders the current status in each row's select, even before hydration", () => {
@@ -107,23 +121,11 @@ describe("rendering", () => {
     expect(row("react").getByRole("button", { name: "Mark applied" })).toBeEnabled();
   });
 
-  it("explains when only the legacy toggle is hiding jobs, and can show them", async () => {
-    const user = setupUser();
-    renderDashboard([legacy, makeLegacyJob("554670")]);
-    expect(screen.getByText(/The only matching jobs are 2 imported IDs without details/)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Show them" }));
-    expect(rowIds()).toEqual(["job-row-554576", "job-row-554670"]);
-    expect(screen.getByRole("checkbox", { name: /Hide imported IDs/ })).not.toBeChecked();
-    // Legacy rows have no salary to show.
-    expect(row("554576").queryByText("Not listed")).not.toBeInTheDocument();
-  });
-
-  it("still says 'no match' when real filters exclude everything", async () => {
+  it("says 'no match' when the filters exclude everything", async () => {
     const user = setupUser();
     renderDashboard();
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "zzz-no-such-job");
     expect(screen.getByText("No jobs match the current filters.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Show them" })).not.toBeInTheDocument();
   });
 
   it("explains an empty database", () => {
@@ -170,21 +172,79 @@ describe("filtering and sorting", () => {
     expect(rowIds()).toHaveLength(3);
   });
 
+  it("filters by company, listing each company once", async () => {
+    const user = setupUser();
+    renderDashboard();
+    const trigger = screen.getByRole("combobox", { name: "Company" });
+    expect(trigger).toHaveTextContent("All companies");
+
+    await user.click(trigger);
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual(["All companies", "Accenture", "Insight Global"]);
+    await user.click(screen.getByRole("option", { name: "Accenture" }));
+    expect(rowIds()).toEqual(["job-row-java"]);
+    expect(trigger).toHaveTextContent("Accenture");
+
+    await choose(user, trigger, "Insight Global");
+    expect(rowIds()).toEqual(["job-row-react", "job-row-python"]);
+
+    await choose(user, trigger, "All companies");
+    expect(rowIds()).toHaveLength(3);
+  });
+
+  const remoteOptions = async (user: ReturnType<typeof setupUser>) => {
+    await user.click(screen.getByRole("combobox", { name: "Remote" }));
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    await user.keyboard("{Escape}");
+    return options;
+  };
+
+  it("filters by remote status", async () => {
+    const user = setupUser();
+    renderDashboard();
+    const trigger = screen.getByRole("combobox", { name: "Remote" });
+    expect(trigger).toHaveTextContent("Any");
+
+    await choose(user, trigger, "Remote not stated");
+    expect(rowIds()).toEqual(["job-row-java"]);
+    await choose(user, trigger, "Remote");
+    expect(rowIds()).toEqual(["job-row-react", "job-row-python"]);
+    await choose(user, trigger, "Any");
+    expect(rowIds()).toHaveLength(3);
+  });
+
+  it("only offers the remote statuses the jobs have", async () => {
+    const user = setupUser();
+    // What a default run saves: remote jobs only.
+    const { unmount } = renderDashboard([react, python]);
+    expect(await remoteOptions(user)).toEqual(["Any", "Remote"]);
+    unmount();
+
+    // --include-unmarked adds "Remote not stated"; still no "Not remote".
+    const second = renderDashboard();
+    expect(await remoteOptions(user)).toEqual(["Any", "Remote", "Remote not stated"]);
+    second.unmount();
+
+    // Only a site with remote-only turned off saves jobs marked not remote.
+    renderDashboard([...jobs, makeJob({ id: "office", is_remote: false })]);
+    expect(await remoteOptions(user)).toEqual(["Any", "Remote", "Remote not stated", "Not remote"]);
+  });
+
+  it("combines the company filter with the others", async () => {
+    const user = setupUser();
+    renderDashboard();
+    await choose(user, screen.getByRole("combobox", { name: "Company" }), "Insight Global");
+    await choose(user, screen.getByRole("combobox", { name: "Status" }), "Applied");
+    expect(rowIds()).toEqual(["job-row-python"]);
+    await choose(user, screen.getByRole("combobox", { name: "Status" }), "Skipped");
+    expect(screen.getByText("No jobs match the current filters.")).toBeInTheDocument();
+  });
+
   it("filters by track", async () => {
     const user = setupUser();
     renderDashboard();
     await choose(user, screen.getByRole("combobox", { name: "Track" }), "Java growth track (entry-level / lower bar)");
     expect(rowIds()).toEqual(["job-row-java"]);
-  });
-
-  it("can show legacy imports, which have no link and a disabled apply button", async () => {
-    const user = setupUser();
-    renderDashboard();
-    await user.click(screen.getByRole("checkbox", { name: /Hide imported IDs without details/ }));
-    const legacyRow = row("554576");
-    expect(legacyRow.getByText("Imported ID 554576 (no details)")).toBeInTheDocument();
-    expect(legacyRow.queryByRole("link")).not.toBeInTheDocument();
-    expect(legacyRow.getByRole("button", { name: "Mark applied" })).toBeDisabled();
   });
 
   it("sorts by title", async () => {
@@ -307,16 +367,23 @@ describe("details drawer", () => {
     expect(details().getByRole("button", { name: "Interviewing" })).toBeEnabled();
   });
 
-  it("explains legacy imports and offers no links", async () => {
+  it("shows the company first in the details summary", async () => {
     const user = setupUser();
     renderDashboard();
-    await user.click(screen.getByRole("checkbox", { name: /Hide imported IDs/ }));
-    await user.click(row("554576").getByRole("button", { name: "Show details for 554576" }));
+    await user.click(row("java").getByRole("button", { name: /Show details/ }));
     const details = within(await screen.findByRole("dialog"));
-    expect(details.getByText(/Imported from the old seen_jobs.json/)).toBeInTheDocument();
+    expect(details.getByText(/^Accenture · Dallas, TX · Contract/)).toBeInTheDocument();
+    expect(details.getByText("Remote not stated")).toBeInTheDocument();
+  });
+
+  it("says so when a job has no links", async () => {
+    const user = setupUser();
+    renderDashboard([makeJob({ id: "bare", job_id: "bare", title: null, url: null, gmail_message_id: null })]);
+    await user.click(row("bare").getByRole("button", { name: "Show details for bare" }));
+    const details = within(await screen.findByRole("dialog"));
     expect(details.getByText("No links were captured for this job.")).toBeInTheDocument();
     expect(details.queryByRole("link")).not.toBeInTheDocument();
-    expect(details.getByRole("button", { name: "Mark applied" })).toBeDisabled();
+    expect(details.getByRole("button", { name: "Mark applied" })).toBeEnabled();
   });
 
   it("closes with the close button and with Escape", async () => {
@@ -346,6 +413,24 @@ describe("refresh", () => {
     expect(await screen.findByText("Fresh Job")).toBeInTheDocument();
     expect(screen.queryByTestId("job-row-react")).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Firestore project 'p'");
+  });
+
+  it("keeps the selected remote status listed after a refresh removes its last job", async () => {
+    const user = setupUser();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ store, jobs: [react] }));
+    renderDashboard();
+    const trigger = screen.getByRole("combobox", { name: "Remote" });
+    await choose(user, trigger, "Remote not stated");
+    expect(rowIds()).toEqual(["job-row-java"]);
+
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("No jobs match the current filters.")).toBeInTheDocument();
+
+    await user.click(trigger);
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    expect(options).toEqual(["Any", "Remote", "Remote not stated"]);
+    await user.click(screen.getByRole("option", { name: "Any" }));
+    expect(rowIds()).toEqual(["job-row-react"]);
   });
 
   it("reports refresh failures", async () => {

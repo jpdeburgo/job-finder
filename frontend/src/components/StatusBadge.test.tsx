@@ -42,7 +42,6 @@ describe("StatusSelect", () => {
       "Interviewing",
       "Rejected",
       "Offer",
-      "Seen",
     ]);
     await user.click(screen.getByRole("option", { name: "Offer" }));
     expect(onChange).toHaveBeenCalledWith("offer");

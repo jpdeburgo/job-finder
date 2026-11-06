@@ -3,7 +3,6 @@
 import { AlertCircleIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -11,9 +10,10 @@ import { fetchJobs, patchJob } from "@/lib/client";
 import {
   DEFAULT_FILTERS,
   countByStatus,
+  distinctCompanies,
+  distinctRemoteStatuses,
   distinctTracks,
   filterJobs,
-  isLegacyImport,
   sortJobs,
   type JobFilters,
   type SortKey,
@@ -45,17 +45,10 @@ export function JobsDashboard({ initialJobs, initialStore }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const counts = useMemo(() => countByStatus(jobs), [jobs]);
+  const companies = useMemo(() => distinctCompanies(jobs), [jobs]);
+  const remoteStatuses = useMemo(() => distinctRemoteStatuses(jobs), [jobs]);
   const tracks = useMemo(() => distinctTracks(jobs), [jobs]);
-  const legacyCount = useMemo(() => jobs.filter(isLegacyImport).length, [jobs]);
   const visible = useMemo(() => sortJobs(filterJobs(jobs, filters), sort), [jobs, filters, sort]);
-  // Would the legacy toggle alone be hiding everything? Then say so instead of "no match".
-  const hiddenByLegacyToggle = useMemo(
-    () =>
-      visible.length === 0 && filters.hideLegacy
-        ? filterJobs(jobs, { ...filters, hideLegacy: false }).length
-        : 0,
-    [jobs, filters, visible.length],
-  );
   const selected = useMemo(() => jobs.find((job) => job.id === selectedId) ?? null, [jobs, selectedId]);
 
   const setBusy = (id: string, busy: boolean) =>
@@ -137,8 +130,9 @@ export function JobsDashboard({ initialJobs, initialStore }: Props) {
       <FilterBar
         filters={filters}
         sort={sort}
+        companies={companies}
+        remoteStatuses={remoteStatuses}
         tracks={tracks}
-        legacyCount={legacyCount}
         refreshing={refreshing}
         onFiltersChange={setFilters}
         onSortChange={setSort}
@@ -168,24 +162,9 @@ export function JobsDashboard({ initialJobs, initialStore }: Props) {
             {visible.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={HEADERS.length} className="text-muted-foreground h-24 text-center">
-                  {jobs.length === 0 ? (
-                    "No jobs tracked yet. Run the search script in backend/ to populate the database."
-                  ) : hiddenByLegacyToggle > 0 ? (
-                    <span>
-                      The only matching jobs are {hiddenByLegacyToggle} imported ID{hiddenByLegacyToggle === 1 ? "" : "s"}{" "}
-                      without details.{" "}
-                      <Button
-                        variant="link"
-                        className="h-auto p-0"
-                        onClick={() => setFilters((current) => ({ ...current, hideLegacy: false }))}
-                      >
-                        Show them
-                      </Button>
-                      {" "}— or run the search script in backend/ to find new matches.
-                    </span>
-                  ) : (
-                    "No jobs match the current filters."
-                  )}
+                  {jobs.length === 0
+                    ? "No jobs tracked yet. Run the search script in backend/ to populate the database."
+                    : "No jobs match the current filters."}
                 </TableCell>
               </TableRow>
             ) : (

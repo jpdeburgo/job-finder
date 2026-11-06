@@ -7,8 +7,12 @@ sync: run the script, refresh the page.
 
 What you can do:
 
-- See every tracked job with its track, matched skills, salary, posted date,
-  and when the script last saw it. Search, filter by status/track, and sort.
+- See every tracked job with its company, track, matched skills, salary,
+  posted date, and when the script last saw it. Search, filter by
+  status/company/remote/track, and sort. Like Company and Track, the Remote
+  filter only offers what your jobs have: "Remote", plus "Remote not stated"
+  for jobs saved by `job_search.py --include-unmarked`, plus "Not remote" only
+  if remote-only was turned off for a site.
 - Change a job's **status** inline (`unemailed` → `emailed` → `applied`,
   `skipped`, `interviewing`, `rejected`, `offer`) or use the **Mark applied**
   button; applied jobs show the date you applied.

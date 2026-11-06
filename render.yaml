@@ -23,3 +23,7 @@ services:
         value: firestore
       - key: IG_EMAIL_TO
         sync: false
+      # Fail the run if the Gmail secret files or IG_EMAIL_TO go missing. Locally,
+      # the script just prints that email isn't set up and carries on.
+      - key: IG_REQUIRE_EMAIL
+        value: "true"

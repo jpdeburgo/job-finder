@@ -17,7 +17,6 @@ from job_search import JobMatch
 from job_store import (
     STATUS_APPLIED,
     STATUS_EMAILED,
-    STATUS_SEEN,
     STATUS_SKIPPED,
     STATUS_UNEMAILED,
     FirestoreJobStore,
@@ -168,18 +167,6 @@ def test_get_job(store):
 # --- Imports & run log -----------------------------------------------------------
 
 
-def test_import_legacy_ids_skips_existing(store):
-    store.save_matches([make_job("1")], new_ids={"1"})
-    store.set_status("1", STATUS_APPLIED)
-
-    added = store.import_legacy_ids([1, 2, 3])
-
-    assert added == 2
-    assert store.get_job("1")["status"] == STATUS_APPLIED  # not clobbered
-    assert store.get_job("2")["status"] == STATUS_SEEN
-    assert store.load_seen_ids() == {"1", "2", "3"}
-
-
 def test_import_documents_copies_local_snapshot_into_another_store(store, tmp_path):
     store.save_matches([make_job("1"), make_job("2")], new_ids={"1", "2"})
     store.set_status("1", STATUS_APPLIED, note="done")
@@ -241,11 +228,11 @@ def test_local_client_prints_the_calls_it_would_make(db_path, capsys):
     assert "[local firestore] list_documents jobs" in out
 
 
-def test_local_client_rejects_legacy_list_file(tmp_path):
+def test_local_client_rejects_a_file_that_is_not_a_collections_map(tmp_path):
     path = tmp_path / "local_firestore.json"
     path.write_text("[1, 2, 3]\n")
 
-    with pytest.raises(ValueError, match="migrate"):
+    with pytest.raises(ValueError, match="should map collection names to documents"):
         FirestoreJobStore.local(path, verbose=False).load_seen_ids()
 
 

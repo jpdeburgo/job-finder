@@ -2,18 +2,19 @@
 
 import { RefreshCwIcon, SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { SORT_OPTIONS, type JobFilters, type SortKey } from "@/lib/jobs";
+import { REMOTE_STATUS_INFO, SORT_OPTIONS, type JobFilters, type RemoteStatus, type SortKey } from "@/lib/jobs";
 import { JOB_STATUSES, STATUS_INFO, type JobStatus } from "@/lib/types";
 
 interface Props {
   filters: JobFilters;
   sort: SortKey;
+  companies: string[];
+  /** Remote statuses present in the data (see `distinctRemoteStatuses`). */
+  remoteStatuses: RemoteStatus[];
   tracks: string[];
-  legacyCount: number;
   refreshing: boolean;
   onFiltersChange: (filters: JobFilters) => void;
   onSortChange: (sort: SortKey) => void;
@@ -23,8 +24,9 @@ interface Props {
 export function FilterBar({
   filters,
   sort,
+  companies,
+  remoteStatuses,
   tracks,
-  legacyCount,
   refreshing,
   onFiltersChange,
   onSortChange,
@@ -41,7 +43,7 @@ export function FilterBar({
           <Input
             id="job-search"
             type="search"
-            placeholder="Title, skill, city, note, job ID…"
+            placeholder="Title, company, skill, city, note, job ID…"
             value={filters.query}
             onChange={(event) => update({ query: event.target.value })}
             className="pl-8"
@@ -62,6 +64,43 @@ export function FilterBar({
                 {STATUS_INFO[status].label}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="filter-company">Company</Label>
+        <Select value={filters.company} onValueChange={(value) => update({ company: value })}>
+          <SelectTrigger id="filter-company" className="w-[170px]">
+            <SelectValue>{filters.company === "all" ? "All companies" : filters.company}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All companies</SelectItem>
+            {companies.map((company) => (
+              <SelectItem key={company} value={company}>
+                {company}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="filter-remote">Remote</Label>
+        <Select value={filters.remote} onValueChange={(value) => update({ remote: value as RemoteStatus | "all" })}>
+          <SelectTrigger id="filter-remote" className="w-[170px]">
+            <SelectValue>{filters.remote === "all" ? "Any" : REMOTE_STATUS_INFO[filters.remote].label}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Any</SelectItem>
+            {(Object.keys(REMOTE_STATUS_INFO) as RemoteStatus[])
+              // Keep the selected status listed even if a refresh removed its last job.
+              .filter((status) => remoteStatuses.includes(status) || status === filters.remote)
+              .map((status) => (
+                <SelectItem key={status} value={status} title={REMOTE_STATUS_INFO[status].hint}>
+                  {REMOTE_STATUS_INFO[status].label}
+                </SelectItem>
+              ))}
           </SelectContent>
         </Select>
       </div>
@@ -97,18 +136,6 @@ export function FilterBar({
             ))}
           </SelectContent>
         </Select>
-      </div>
-
-      <div className="flex h-9 items-center gap-2">
-        <Checkbox
-          id="hide-legacy"
-          checked={filters.hideLegacy}
-          onCheckedChange={(checked) => update({ hideLegacy: checked === true })}
-        />
-        <Label htmlFor="hide-legacy" className="font-normal">
-          Hide imported IDs without details
-          {legacyCount > 0 && <span className="text-muted-foreground text-xs">({legacyCount})</span>}
-        </Label>
       </div>
 
       <Button variant="outline" onClick={onRefresh} disabled={refreshing} className="ml-auto">

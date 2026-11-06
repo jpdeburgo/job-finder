@@ -9,13 +9,14 @@ Firestore client. Two clients are supported:
   that mirrors Firestore's collections/documents layout and prints every call
   it would have made. No Firebase setup needed for local runs or tests.
 
-Layout of the ``jobs`` collection (one document per Insight Global job ID --
-the job's UUID, or a bare number for jobs imported from the old job board)::
+Layout of the ``jobs`` collection (one document per job ID:
+``<company>-<the site's own ID>``, e.g. ``accenture-R00212345`` or
+``insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba``)::
 
-    jobs/6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba
-        job_id, title, url, track, matched_skills, score, salary_low, ...
+    jobs/insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba
+        job_id, company, title, url, track, matched_skills, score, salary_low, ...
         status            unemailed | emailed | applied | skipped |
-                          interviewing | rejected | offer | seen
+                          interviewing | rejected | offer
         first_seen_at, last_seen_at, emailed_at, applied_at,
         status_updated_at, notes
 
@@ -48,7 +49,6 @@ STATUS_SKIPPED = "skipped"
 STATUS_INTERVIEWING = "interviewing"
 STATUS_REJECTED = "rejected"
 STATUS_OFFER = "offer"
-STATUS_SEEN = "seen"  # legacy IDs imported from seen_jobs.json (no details)
 JOB_STATUSES = (
     STATUS_UNEMAILED,
     STATUS_EMAILED,
@@ -57,7 +57,6 @@ JOB_STATUSES = (
     STATUS_INTERVIEWING,
     STATUS_REJECTED,
     STATUS_OFFER,
-    STATUS_SEEN,
 )
 
 DEFAULT_JOBS_COLLECTION = "jobs"
@@ -280,27 +279,6 @@ class FirestoreJobStore:
             }
         )
 
-    def import_legacy_ids(self, ids: Iterable[str | int]) -> int:
-        """Record bare job IDs (old seen_jobs.json); returns how many were new."""
-        now = utcnow()
-        existing = self.load_seen_ids()
-        writes = [
-            (
-                self._doc_id(job_id),
-                {
-                    "job_id": self._doc_id(job_id),
-                    "status": STATUS_SEEN,
-                    "first_seen_at": now,
-                    "last_seen_at": now,
-                    "status_updated_at": now,
-                    "notes": "Imported from seen_jobs.json",
-                },
-            )
-            for job_id in sorted({self._doc_id(i) for i in ids} - existing)
-        ]
-        self._commit_in_batches(writes)
-        return len(writes)
-
     def import_documents(self, documents: dict[str, dict[str, Any]]) -> int:
         """Copy full job documents (e.g. from local_firestore.json) that aren't
         already present; returns how many were added."""
@@ -497,8 +475,8 @@ class LocalFirestoreClient:
         data = json.loads(self.path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError(
-                f"{self.path.name} should map collection names to documents; "
-                "run `python jobs_cli.py migrate` to import an old seen_jobs.json"
+                f"{self.path} should map collection names to documents, "
+                'e.g. {"jobs": {...}, "runs": {...}}'
             )
         return {
             collection: {doc_id: _decode(fields) for doc_id, fields in docs.items()}

@@ -10,25 +10,20 @@ def test_cli_help_lists_every_command(capsys):
     out = capsys.readouterr().out
     for name in ("list", "show", "applied", "skip", "status", "migrate"):
         assert f"\n  {name:<9}" in out
-    assert "jobs_cli.py applied [-h] [--note NOTE] job_id" in out
+    assert "jobs_cli.py applied [-h] [--note NOTE] [--local] job_id" in out
 
     assert jobs_cli.main([]) == 0  # no command at all also prints help
     assert "Commands:" in capsys.readouterr().out
 
 
-def test_cli_migrate_list_applied_show(tmp_path, capsys):
-    legacy = tmp_path / "seen_jobs.json"
-    legacy.write_text("[10, 11]\n")
+def test_cli_list_applied_show(tmp_path, capsys):
     store = FirestoreJobStore.local(tmp_path / "local_firestore.json", verbose=False)
     store.save_matches([make_job("12", title="React Dev")], new_ids={"12"})
     store.mark_emailed(["12"], "m")
 
-    assert jobs_cli.main(["migrate", str(legacy)], store) == 0
-    assert "Imported 2 new job ID(s)" in capsys.readouterr().out
-
     assert jobs_cli.main(["list"], store) == 0
     out = capsys.readouterr().out
-    assert "React Dev" in out and "(no details - imported ID)" in out
+    assert "React Dev" in out
     assert "unemailed" not in out
 
     assert jobs_cli.main(["applied", "12", "--note", "done"], store) == 0
@@ -52,6 +47,17 @@ def test_cli_migrate_copies_local_snapshot(tmp_path, capsys):
 
     assert "Imported 1 job document(s)" in capsys.readouterr().out
     assert target.get_job("1")["status"] == "applied"
+
+
+def test_cli_migrate_rejects_an_old_id_list(tmp_path, capsys):
+    old = tmp_path / "seen_jobs.json"
+    old.write_text("[10, 11]\n")
+    store = FirestoreJobStore.local(tmp_path / "local_firestore.json", verbose=False)
+
+    assert jobs_cli.main(["migrate", str(old)], store) == 1
+
+    assert "is not a local_firestore.json file" in capsys.readouterr().err
+    assert store.load_seen_ids() == set()
 
 
 def test_cli_list_flags_unemailed_jobs(tmp_path, capsys):

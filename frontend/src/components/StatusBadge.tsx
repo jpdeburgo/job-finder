@@ -12,7 +12,6 @@ export const STATUS_STYLES: Record<string, string> = {
     "border-violet-300 bg-violet-100 text-violet-900 dark:border-violet-800 dark:bg-violet-950/60 dark:text-violet-200",
   rejected: "border-rose-300 bg-rose-100 text-rose-900 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200",
   offer: "border-emerald-400 bg-emerald-200 text-emerald-950 dark:border-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-100",
-  seen: "border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400",
 };
 
 const UNKNOWN_STYLE = "border-zinc-300 bg-zinc-100 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";

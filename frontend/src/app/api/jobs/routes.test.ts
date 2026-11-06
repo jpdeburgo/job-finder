@@ -63,7 +63,7 @@ describe("GET /api/jobs", () => {
       emulator: false,
       envFile: null,
     });
-    expect(body.jobs).toHaveLength(6);
+    expect(body.jobs).toHaveLength(4);
     expect(body.jobs.map((job: { id: string }) => job.id)).toContain(REACT_ID);
   });
 
