@@ -34,7 +34,7 @@ export default defineConfig({
         "src/test/**",
         "src/app/layout.tsx",
         "src/app/error.tsx",
-        "src/app/page.tsx",
+        "src/app/**/page.tsx", // thin server wrappers around tested components
         // Vendored shadcn/ui primitives; exercised through the components that use them.
         "src/components/ui/**",
       ],

@@ -8,6 +8,7 @@ import { formatDate, formatLocation, formatSalary, hasApplied, trackLabel } from
 import type { Job, JobStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ExternalLink } from "./ExternalLink";
+import { FitBadge } from "./FitBadge";
 import { RemoteLabel } from "./RemoteLabel";
 import { StatusSelect } from "./StatusSelect";
 
@@ -51,6 +52,10 @@ export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props)
           <RemoteLabel job={job} />
           {job.job_type && <span>{job.job_type}</span>}
         </div>
+      </TableCell>
+
+      <TableCell>
+        <FitBadge job={job} />
       </TableCell>
 
       <TableCell>

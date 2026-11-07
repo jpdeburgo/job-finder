@@ -9,6 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  FIT_PARTS,
   formatDate,
   formatLocation,
   formatSalary,
@@ -18,6 +19,7 @@ import {
 } from "@/lib/jobs";
 import type { Job, JobStatus } from "@/lib/types";
 import { ExternalLink } from "./ExternalLink";
+import { FitBadge } from "./FitBadge";
 import { RemoteLabel } from "./RemoteLabel";
 import { StatusBadge } from "./StatusBadge";
 
@@ -149,6 +151,34 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave }: Props) {
             <Timestamp value={job.status_updated_at} />
           </Field>
         </dl>
+
+        {job.fit_score != null && (
+          <div data-testid="fit-details">
+            <div className="text-muted-foreground flex items-center gap-2 text-xs font-medium tracking-wide uppercase">
+              Fit <FitBadge job={job} className="normal-case" />
+            </div>
+            <dl className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+              {FIT_PARTS.filter(({ key }) => job.fit_breakdown[key] != null).map(({ key, label }) => {
+                const points = job.fit_breakdown[key];
+                return (
+                  <div key={key} className="flex gap-1">
+                    <dt className="text-muted-foreground">{label}</dt>
+                    <dd className={points < 0 ? "text-rose-700 dark:text-rose-400" : "font-medium"}>
+                      {points > 0 ? `+${points}` : points < 0 ? `−${Math.abs(points)}` : "0"}
+                    </dd>
+                  </div>
+                );
+              })}
+            </dl>
+            {job.fit_reasons.length > 0 && (
+              <ul className="text-muted-foreground mt-1.5 list-disc space-y-0.5 pl-4 text-xs">
+                {job.fit_reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         {job.matched_skills.length > 0 && (
           <div>

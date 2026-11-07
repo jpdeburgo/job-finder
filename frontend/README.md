@@ -1,15 +1,30 @@
-# Job Tracker dashboard (frontend)
+# Job Finder dashboard (frontend)
 
 A Next.js dashboard for the jobs that [`../backend`](../backend/README.md)
 finds and records. It reads the same Firestore database (or the same
 `local_firestore.json` stand-in) the script writes, so there is nothing to
 sync: run the script, refresh the page.
 
-What you can do:
+It has two pages, linked from the header:
 
-- See every tracked job with its company, track, matched skills, salary,
-  posted date, and when the script last saw it. Search, filter by
-  status/company/remote/track, and sort. Like Company and Track, the Remote
+- **Home (`/`)** shows where your search stands. At the top are the **Run
+  search** button and the result of the last run. Below that are totals for
+  jobs to review, applied, interviewing, and offers. Each total opens the
+  tracker filtered to that status. Last come the newest matches and your
+  latest status changes. If some matches were saved but never emailed (Gmail
+  isn't set up yet), a notice links to them. With nothing tracked yet, the
+  page explains how it works instead.
+- **Jobs (`/jobs`)** is the tracker. `/jobs?status=applied` opens it filtered
+  to one status, and the address bar follows the status filter as you change
+  it, so a reload or a bookmark keeps the view.
+
+In the tracker you can:
+
+- See every tracked job with its company, fit score, track, matched skills,
+  salary, posted date, and when the script last saw it. Search, filter by
+  status/company/remote/track, and sort (**Best fit** puts the jobs that suit
+  you best first; the details drawer explains each score, see
+  [Fit score](../backend/README.md#fit-score)). Like Company and Track, the Remote
   filter only offers what your jobs have: "Remote", plus "Remote not stated"
   for jobs saved by `job_search.py --include-unmarked`, plus "Not remote" only
   if remote-only was turned off for a site.
@@ -19,6 +34,11 @@ What you can do:
 - Expand a row for every field, a **notes** editor, and all of the job's links:
   the Insight Global posting (to apply), the digest email it arrived in
   (Gmail), and a search for its title. Every link opens in a new tab.
+- **Run search** starts the search script right away instead of waiting for
+  the daily cron job. The panel shows the run's progress and output and, when
+  it finishes, what it found and emailed. New matches appear in the table
+  automatically. This needs the search API running (see
+  [Running a search](#running-a-search)).
 - The banner at the top says which database you're looking at (local file,
   Firestore, or the emulator). Light/dark/system theme toggle in the header.
 
@@ -38,6 +58,33 @@ With nothing configured the dashboard opens `../backend/local_firestore.json`
 — the same file the script uses when Firebase isn't set up — and edits it in
 place. Run `pipenv run python job_search.py` in `backend/` and refresh to see
 new matches.
+
+## Running a search
+
+The **Run search** button talks to the search API in `backend/api.py`
+(FastAPI), which runs the same code as `job_search.py`. Start it alongside the
+dashboard:
+
+```bash
+cd backend
+pipenv run uvicorn api:app --reload      # http://127.0.0.1:8000
+```
+
+The browser never calls the API directly. It calls this app's `/api/runs`
+routes, and the server forwards them. So there's no CORS to set up, and the
+API token stays on the server. Two optional variables, read like the others
+(from `frontend/.env.local`, else the script's `.env`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `IG_API_URL` | `http://127.0.0.1:8000` | Where the API listens. |
+| `IG_API_TOKEN` | none | Sent as `Authorization: Bearer ...`. It must match the API's `IG_API_TOKEN`. Setting it once in `backend/.env` configures both. |
+
+If the API isn't running, the panel says so and how to start it. Everything
+else on the page still works. Only one search runs at a time. Clicking
+**Run search** while one is going (say, from another tab) follows that run
+instead of starting a second. The daily cron job doesn't go through the API,
+so it runs whether or not the API is up.
 
 ## Choosing the database
 
@@ -102,25 +149,32 @@ so both talk to the emulator. (`FIREBASE_PROJECT_ID` defaults to
 ```
 src/
 ├── app/
-│   ├── page.tsx                 server component: reads the store, renders the dashboard
+│   ├── page.tsx                 home screen (/): reads the store, renders HomeOverview
+│   ├── jobs/page.tsx            the tracker (/jobs, ?status=...): reads the store, renders JobsDashboard
 │   ├── api/jobs/route.ts        GET  /api/jobs          → { store, jobs }
-│   └── api/jobs/[id]/route.ts   GET  /api/jobs/:id      → { job }
-│                                PATCH /api/jobs/:id     { status?, notes? } → { job }
-├── components/                  client UI (JobsDashboard, JobRow, JobDetails drawer, FilterBar, ...)
+│   ├── api/jobs/[id]/route.ts   GET  /api/jobs/:id      → { job }
+│   │                            PATCH /api/jobs/:id     { status?, notes? } → { job }
+│   └── api/runs/…               POST /api/runs, GET /api/runs/latest, GET /api/runs/:id
+│                                → forwarded to backend/api.py (FastAPI) → { run }
+├── components/                  client UI (HomeOverview, JobsDashboard, RunSearchPanel, SiteNav, JobRow, JobDetails drawer, ...)
 │   └── ui/                      shadcn/ui primitives (button, select, sheet, table, ...)
 └── lib/
     ├── config.ts                IG_STATE_BACKEND / Firebase env resolution (port of job_store.py)
     ├── store/                   JobStore interface + Firestore (firebase-admin) and JSON-file implementations
     ├── status-update.ts         validates PATCH bodies; builds the same fields jobs_cli.py writes
+    ├── search-api.ts            server-side forwarding to the search API (IG_API_URL / IG_API_TOKEN)
+    ├── runs.ts                  describing search runs (pure functions)
+    ├── overview.ts              home-screen totals and lists; /jobs?status= links (pure functions)
+    ├── load-jobs.ts             the pages' store read, with config errors turned into a message
     ├── jobs.ts                  normalising, sorting, filtering, formatting (pure functions)
-    └── client.ts                the browser's fetch wrapper for the two API routes
+    └── client.ts                the browser's fetch wrapper for the API routes
 ```
 
 - **UI components are [shadcn/ui](https://ui.shadcn.com)** on Radix
   primitives, styled with Tailwind v4 — see [Component library](#component-library).
 - All database access happens **on the server** (route handlers and the
   server component) through the Firebase **Admin SDK** with the script's
-  service account. The browser only talks to `/api/jobs`; no Firebase
+  service account. The browser only talks to `/api/jobs` and `/api/runs`; no Firebase
   credentials or config are shipped to the client.
 - The page is rendered at request time (`connection()` + `<Suspense>`), so
   it's never frozen into a static build.
@@ -152,7 +206,8 @@ regenerate a different palette from the shadcn theme editor and paste it in.
 
 Today there is **no login**: the dashboard trusts whoever can reach it and
 uses server-side admin credentials, which is appropriate for running on your
-own machine. Don't deploy it publicly as-is.
+own machine. Don't deploy it publicly as-is: anyone who can open it can also
+click **Run search**, which sends digest emails.
 
 When you want to host it, the cleanest upgrade is **Firebase Authentication**
 with the Admin SDK verifying the session:

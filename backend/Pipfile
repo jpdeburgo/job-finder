@@ -10,9 +10,12 @@ google-api-python-client = "*"
 google-auth-httplib2 = "*"
 google-auth-oauthlib = "*"
 google-cloud-firestore = "*"
+fastapi = "*"
+uvicorn = "*"
 
 [dev-packages]
 pytest = "*"
+httpx2 = "*"
 
 [requires]
 python_version = "3"

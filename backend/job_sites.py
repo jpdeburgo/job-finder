@@ -1,6 +1,6 @@
 """Job sites the search can scan, all behind one small interface.
 
-Every URL in ``job_search.JOB_SEARCH_URLS`` is turned into a ``JobSite`` by
+Every URL in ``job_boards.JOB_SEARCH_URLS`` is turned into a ``JobSite`` by
 ``resolve_job_site``. A site knows how to page through keyword search results
 (``fetch_page``) and how to load one posting's full description
 (``fetch_details``), and hands back ``Posting`` objects with the same fields

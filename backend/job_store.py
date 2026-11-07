@@ -211,6 +211,11 @@ class FirestoreJobStore:
         jobs = self._sort_newest_first([doc.to_dict() for doc in query.stream()])
         return jobs[:limit] if limit else jobs
 
+    def list_job_documents(self) -> list[tuple[str, dict[str, Any]]]:
+        """Every job as ``(document ID, fields)``, in no particular order (api.py
+        filters and sorts them; see job_queries.py)."""
+        return [(doc.id, doc.to_dict()) for doc in self._jobs.stream()]
+
     def _where(self, field: str, op: str, value: Any) -> Any:
         try:
             from google.cloud.firestore_v1 import FieldFilter
@@ -255,6 +260,28 @@ class FirestoreJobStore:
         if not reference.get().exists:
             raise KeyError(f"Job {job_id} is not in the store")
         reference.update(self._status_fields(status, note, utcnow()))
+        return reference.get().to_dict()
+
+    def update_job(
+        self, job_id: str, status: str | None = None, notes: str | None = None
+    ) -> dict[str, Any]:
+        """Change a job's status and/or notes; return the updated document.
+
+        Writes the same fields as the dashboard's PATCH /api/jobs/:id:
+        ``status`` sets ``status_updated_at`` (and ``applied_at`` for
+        "applied"), and ``notes`` replaces the notes (``""`` clears them).
+        Raises ``KeyError`` for an unknown job, ``ValueError`` for an unknown
+        status or when there is nothing to change.
+        """
+        if status is None and notes is None:
+            raise ValueError("Nothing to update: provide status and/or notes")
+        fields = self._status_fields(status, None, utcnow()) if status is not None else {}
+        if notes is not None:
+            fields["notes"] = notes
+        reference = self._jobs.document(self._doc_id(job_id))
+        if not reference.get().exists:
+            raise KeyError(f"Job {job_id} is not in the store")
+        reference.update(fields)
         return reference.get().to_dict()
 
     def log_run(

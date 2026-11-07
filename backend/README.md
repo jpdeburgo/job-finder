@@ -1,13 +1,14 @@
 # Job Finder (backend)
 
-The search script, job store, and CLI. The Next.js dashboard that reads the
+The search script, job store, CLI, and the HTTP API the dashboard uses to
+start searches (`api.py`). The Next.js dashboard that reads the
 same data lives in [`../frontend`](../frontend/README.md); the repository
 overview is in the [root README](../README.md). Run every command below from
 this `backend/` directory.
 
-Searches every careers page in `JOB_SEARCH_URLS` (Insight Global and Accenture
-out of the box; see [Job sites](#job-sites)) for remote jobs matching
-configurable tracks:
+Searches every careers page in `JOB_SEARCH_URLS` (in `job_boards.py`: Insight
+Global, Accenture, and 18 company Workday/Greenhouse boards; see
+[Job sites](#job-sites)) for remote jobs matching configurable tracks:
 
 - **Core stack:** software engineering roles scored against the skills in
   `RESUME_SKILLS`. A job needs at least two matches, one of them a core
@@ -28,7 +29,8 @@ listings and postings older than `MAX_POSTED_AGE_DAYS` (30). A title that
 names a growth-track stack (Java/iOS/.NET) is only ever evaluated under that
 stack's own growth-track rules, even if it racks up enough incidental
 core-skill matches to otherwise pass as a Core match. Each emailed job shows
-its Job ID alongside the usual details.
+its Job ID alongside the usual details, plus a **fit score** that ranks how
+well it suits you (see [Fit score](#fit-score)).
 
 Only new matches are emailed. Every match is recorded in **Firebase
 Firestore** along with its details and an application status, so you can track
@@ -39,13 +41,24 @@ test it on your machine.
 
 ## Job sites
 
-`JOB_SEARCH_URLS` in `job_search.py` lists the pages to scan:
+`JOB_SEARCH_URLS` in `job_boards.py` lists the pages to scan:
 
 ```python
 INSIGHT_GLOBAL_URL = "https://insightglobal.com/jobs/search/all/all"
 ACCENTURE_SEARCH_URL = "https://www.accenture.com/us-en/careers/jobsearch"
-JOB_SEARCH_URLS = [INSIGHT_GLOBAL_URL, ACCENTURE_SEARCH_URL]
+NVIDIA_URL = "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"   # Workday
+GITLAB_URL = "https://boards.greenhouse.io/gitlab"                              # Greenhouse
+...
+JOB_SEARCH_URLS = [INSIGHT_GLOBAL_URL, ACCENTURE_SEARCH_URL, NVIDIA_URL, ..., GITLAB_URL, ...]
 ```
+
+Out of the box that's Insight Global, Accenture, six more Workday boards
+(NVIDIA, Salesforce, Adobe, PayPal, Mastercard, Walmart), and twelve
+Greenhouse boards (GitLab, Cloudflare, Datadog, Reddit, Duolingo, Databricks,
+Figma, Vercel, Robinhood, Coinbase, Discord, Greenhouse).
+`python job_search.py --list-sites` shows how each one is read. A test
+(`tests/test_job_boards.py`) fails if a `*_URL` constant in `job_boards.py`
+is missing from `JOB_SEARCH_URLS`, or if a URL stops resolving to a board.
 
 Careers pages like these render their results in the browser, so their HTML
 has no jobs in it. `job_sites.resolve_job_site` maps each URL to the JSON API
@@ -57,12 +70,12 @@ filters, tracks, and skill scoring above treat every site the same way.
 | Insight Global | `/all/jobs` search and `/all/jobs/<id>/details` on insightglobal.com | `insight-global-<uuid>` | Contract / contract-to-perm only. Links to `https://insightglobal.com/jobs/<id>`. |
 | Accenture | its Workday board, `accenture.wd103.myworkdayjobs.com/AccentureCareers` (via `KNOWN_CAREER_SITES`) | `accenture-<requisition>` | Any job type (Accenture hires directly). Narrowed to `JOB_COUNTRY` (United States). Links to the Workday posting. |
 | Any Workday board: `https://<company>.wdN.myworkdayjobs.com/<site>` | Workday's `/wday/cxs/...` search API | `<company>-<requisition>` | Narrowed to `JOB_COUNTRY` when the board has a country filter. |
-| Any Greenhouse board: `https://boards.greenhouse.io/<company>` | Greenhouse Job Board API | `<company>-<id>` | The whole board is downloaded once per run; search terms are matched against titles and descriptions locally. |
+| Any Greenhouse board: `https://boards.greenhouse.io/<company>` | Greenhouse Job Board API | `<company>-<id>` | The whole board is downloaded once per run; search terms are matched against titles and descriptions locally. No country filter, so jobs whose location names another country or region ("Remote - Canada", "Remote, EMEA") are dropped (see `NON_US_LOCATION_WORDS`). |
 | Any Lever board: `https://jobs.lever.co/<company>` | Lever Postings API | `<company>-<id>` | Same as Greenhouse. |
 | Any other careers page | the page's HTML is checked for a Workday/Greenhouse/Lever board link | as above | If no link is found, the site is skipped with a warning. Add its board to `KNOWN_CAREER_SITES` in `job_sites.py`. |
 
-To add a company, append its careers page or ATS board URL to
-`JOB_SEARCH_URLS`. Each run prints how many matches every site produced. A
+To add a company, add its careers page or ATS board URL to `job_boards.py`
+and to `JOB_SEARCH_URLS` there. Each run prints how many matches every site produced. A
 URL that can't be resolved is skipped with a warning, and the other sites
 still run.
 
@@ -103,6 +116,33 @@ on-site jobs for a site, turn off remote-only for it:
 agency, and off for every other site, since companies hiring directly mostly
 post full-time roles.
 
+## Fit score
+
+Every match gets a **fit score** from 0 to 100 (`job_fit.py`) that ranks how
+well the job suits you, so the best jobs rise to the top. The email sorts each
+track's jobs best fit first and shows the score on each one (e.g. **Fit 82/100
+(Strong)**). The dashboard shows it in a **Fit** column, sorts by it with
+**Best fit**, and the details drawer explains it. The old `score` field (the
+number of matched skills) is still saved, but a raw count can't tell a
+"Network Engineer" posting that mentions four of your tools from a "Full Stack
+Developer" built on your main languages.
+
+| Part | Points | What it measures |
+| --- | --- | --- |
+| `skills` | 0 to 55 | Resume skills the posting mentions. Core languages (`CORE_LANGUAGE_SKILLS`) count 1, other skills 0.5, and spellings of one skill (`SKILL_ALIASES`: React/ReactJS) count once. Full marks at 4. |
+| `role` | 0 to 45 | The title is a role you target (`TARGET_ROLE_TITLES`: Software Engineer, Full Stack, Backend, ...) = 30, or a generic one (`GENERIC_ROLE_TITLES`: Developer) = 15; a core language in the title adds 15. |
+| `experience` | 0 or less | Years asked for (or implied by the title: Senior ~5, Lead/Staff ~7, Principal ~9, whichever is more) against `YEARS_OF_EXPERIENCE`. 1 year short keeps 90%, 2 keep 75%, 3 keep 60%, 4+ keep 45%. |
+| `remote` | 0 or less | Remote keeps 100%, "remote not stated" 85%, hybrid/on-site 60%. |
+| `stack` | 0 or less | The description names tech not on your resume (`NON_RESUME_TITLE_TECH`): -5% each, at most -15%. |
+
+The parts are saved in `fit_breakdown` and add up to `fit_score`
+(`fit_reasons` says the same in words). Bands: **Strong** 75+, **Good** 60+,
+**Fair** 40+, **Weak** below 40. Set `YEARS_OF_EXPERIENCE` in `job_search.py`
+to your own number. Growth-track jobs (Java/iOS/.NET) score lower because
+those stacks aren't your main one; they still appear in their own section of
+the email. Jobs saved before the fit score existed show a dash until a search
+sees them again.
+
 ## Install and run
 
 ```bash
@@ -115,6 +155,7 @@ pipenv run python job_search.py --site workday        # every Workday board
 pipenv run python job_search.py --local --site https://boards.greenhouse.io/acme   # try a new board
 pipenv run python job_search.py --include-unmarked    # also keep jobs whose remote status isn't stated
 pipenv run python job_search.py --list-sites          # what's configured and how each is read
+pipenv run uvicorn api:app --reload                   # let the dashboard's Run search button start runs (see below)
 ```
 
 `--site` takes a site name (`accenture`, `"insight global"`), a board kind
@@ -166,6 +207,98 @@ Email sent (...).
 
 Tune search terms, skills, remote-only behavior, page depth, and matching
 thresholds at the top of `job_search.py`.
+
+## Running a search from the dashboard (HTTP API)
+
+`api.py` is a small FastAPI app that lets the [dashboard](../frontend/README.md)'s
+**Run search** button start a search, and lets anything else (scripts,
+another app) list, filter, and update the tracked jobs
+([Jobs endpoints](#jobs-endpoints)). It calls the same `job_search.main()`
+the command line does, so a run started there searches, saves, and emails
+exactly like the scheduled one. **The cron job doesn't use the API.** It keeps
+running `python job_search.py`, so scheduled runs don't depend on a web server
+being up.
+
+```bash
+cd backend
+pipenv run uvicorn api:app --reload     # http://127.0.0.1:8000 (interactive docs at /docs)
+```
+
+Leave it running next to `npm run dev` in `../frontend`. The dashboard finds
+it at `http://127.0.0.1:8000` unless you set `IG_API_URL`.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /health` | Liveness check. Never needs the token. |
+| `POST /runs` | Starts a search in the background and returns `202 {"run": ...}` at once. The optional body `{"sites": ["accenture"], "include_unmarked": true}` works like `--site` / `--include-unmarked`. Returns `409` (with the current run) if a search is already going. |
+| `GET /runs/{id}` | One run: `status` (`running`, `succeeded`, `failed`), `summary` (matches, new, emailed), `error`, and everything the run printed so far (`output`). Poll it until `status` isn't `running`. |
+| `GET /runs/latest` | The newest run, or `{"run": null}`. |
+| `GET /runs` | Recent runs, newest first, without their output. |
+
+### Jobs endpoints
+
+The API also reads and updates the tracked jobs, in the same database the
+search writes to (see [Job state](#job-state-local-file-or-firebase-firestore)).
+Jobs come back in the same shape the dashboard uses: every field present,
+timestamps as ISO strings.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /jobs` | Jobs matching the filters below, sorted, paged: `{"jobs": [...], "total", "limit", "offset"}`. `sort`: `last_seen` (default), `posted`, `salary`, `score`, `title`, `status`, the same orders as the dashboard's Sort menu ("Not listed" salaries last). `limit` 1-500 (default 100), `offset`. |
+| `GET /jobs/stats` | Counts by status (every status, zeros included), company, track, and remote status, plus `total` and `applied`. Takes the same filters. |
+| `GET /jobs/{job_id}` | One job: `{"job": ...}`, or `404`. |
+| `PATCH /jobs/{job_id}` | `{"status": "applied", "notes": "..."}` (either or both). Writes exactly what the dashboard and `jobs_cli.py` write: `status_updated_at`, and `applied_at` for `applied`. `""` or `null` notes clear them. Returns the updated job. |
+
+Filters (all optional; they combine with AND, and a filter given several
+values matches any of them):
+
+| Parameter | Matches |
+| --- | --- |
+| `q` | Text anywhere in the title, company, skills, city/state, job type, notes, track, or ID (any case). |
+| `status` | Workflow status. Repeat it or comma-separate: `status=emailed,unemailed`. |
+| `company` | Company name, any case. Repeat for several. |
+| `track` | Track name or its start: `core`, `java`, `ios`, `.net`. |
+| `remote` | `remote`, `unmarked` (the site didn't say), `not_remote`. |
+| `skill` | Matched skill. Repeat for several; the job needs **all** of them. |
+| `min_salary` | Highest listed amount at least this; excludes "Not listed". |
+| `posted_since`, `seen_since` | `YYYY-MM-DD`: posted, or last seen by the search, on or after. |
+| `applied` | `true`: jobs you've applied to (status `applied`, or `applied_at` set). `false`: the rest. |
+
+```bash
+curl 'http://127.0.0.1:8000/jobs?status=emailed&company=Accenture&sort=salary'
+curl 'http://127.0.0.1:8000/jobs?skill=React&skill=TypeScript&remote=remote&limit=10'
+curl 'http://127.0.0.1:8000/jobs/stats?seen_since=2026-11-01'
+curl -X PATCH http://127.0.0.1:8000/jobs/accenture-R00212345 \
+     -H 'Content-Type: application/json' -d '{"status": "applied", "notes": "Applied via site"}'
+# With IG_API_TOKEN set, add: -H "Authorization: Bearer $IG_API_TOKEN"
+```
+
+The full list, with every parameter, is at `/docs` while the API runs. The
+dashboard doesn't use these endpoints yet. It still reads the database
+through its own `/api/jobs` routes, so both keep working side by side.
+
+Things to know:
+
+- **One search at a time, one worker.** A second `POST /runs` while one is
+  running gets a `409`. Run history lives in memory (the last 20 runs), so a
+  restart forgets it. Run uvicorn with the default single worker. The jobs
+  and the `runs` log in the database are unaffected either way.
+- **The API and the cron job don't coordinate.** If you click **Run search**
+  while the scheduled run is going, both run. Firestore merges the writes
+  safely, but the same new jobs may go out in two digests. With
+  `local_firestore.json`, the two could overwrite each other's saves. Avoid
+  clicking it around `13:00 UTC`.
+- **Token.** Set `IG_API_TOKEN` and every endpoint except `/health` requires
+  `Authorization: Bearer <token>`. The dashboard reads the same variable
+  (from `backend/.env` too) and sends it for you. Without a token, anyone who
+  can reach the port can start searches and send digests, read your jobs
+  and notes, and change their statuses. `sites` can also make the server
+  fetch any URL. So set a token before the API listens
+  anywhere but `127.0.0.1`.
+- **Gmail's first sign-in is interactive.** If `credentials.json` exists but
+  `token.json` doesn't, the first run opens a consent page in a browser *on
+  the machine running the API*, and waits there. Do that first sign-in with
+  `pipenv run python job_search.py` instead.
 
 ## Gmail API setup
 
@@ -301,7 +434,9 @@ pipenv run python jobs_cli.py status insight-global-6a506de5-fa1b-4df7-b3a1-b4e2
 ## Render deployment
 
 `../render.yaml` defines a daily cron job at `13:00 UTC` with `rootDir:
-backend`, so only this directory is built. Create a Render Blueprint, then:
+backend`, so only this directory is built. The cron job runs
+`python -u job_search.py` and doesn't need the HTTP API. The Blueprint doesn't
+deploy `api.py` (or the dashboard). Create a Render Blueprint, then:
 
 1. Add secret file `credentials.json` with the OAuth client JSON.
 2. Add secret file `token.json` with the token generated by the local run.
@@ -324,5 +459,9 @@ pipenv run pytest          # from backend/
 ```
 
 or `pytest` from the repository root to also run the archive-script tests.
+`tests/test_api.py` covers the HTTP API with FastAPI's test client, a fake
+search, and a temporary local store, so it needs neither network access nor a
+running server. `tests/test_job_queries.py` covers the filtering and sorting
+behind `GET /jobs`.
 The suite includes a round-trip check that documents written by the dashboard
 (`../frontend`) read back correctly here.

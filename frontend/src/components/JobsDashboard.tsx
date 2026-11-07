@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertCircleIcon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Sheet } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -23,21 +23,24 @@ import { cn } from "@/lib/utils";
 import { FilterBar } from "./FilterBar";
 import { JobDetails } from "./JobDetails";
 import { JobRow } from "./JobRow";
+import { RunSearchPanel } from "./RunSearchPanel";
 import { statusClasses, statusLabel } from "./StatusBadge";
 import { StoreBanner } from "./StoreBanner";
 
 interface Props {
   initialJobs: Job[];
   initialStore: StoreInfo;
+  /** Starting filters, e.g. from `/jobs?status=applied`. */
+  initialFilters?: JobFilters;
 }
 
-const HEADERS = ["", "Job", "Track", "Skills", "Salary", "Posted", "Last seen", "Status", "Applied"];
+const HEADERS = ["", "Job", "Fit", "Track", "Skills", "Salary", "Posted", "Last seen", "Status", "Applied"];
 
 /** The whole interactive dashboard: banner, summary, filters, table, and details drawer. */
-export function JobsDashboard({ initialJobs, initialStore }: Props) {
+export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFAULT_FILTERS }: Props) {
   const [jobs, setJobs] = useState<Job[]>(initialJobs);
   const [store, setStore] = useState<StoreInfo>(initialStore);
-  const [filters, setFilters] = useState<JobFilters>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<JobFilters>(initialFilters);
   const [sort, setSort] = useState<SortKey>("last_seen");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
@@ -50,6 +53,15 @@ export function JobsDashboard({ initialJobs, initialStore }: Props) {
   const tracks = useMemo(() => distinctTracks(jobs), [jobs]);
   const visible = useMemo(() => sortJobs(filterJobs(jobs, filters), sort), [jobs, filters, sort]);
   const selected = useMemo(() => jobs.find((job) => job.id === selectedId) ?? null, [jobs, selectedId]);
+
+  // Keep ?status= in the address bar in step with the status filter, so a
+  // reload or a shared link opens the same view (the home screen links here).
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (filters.status === "all") url.searchParams.delete("status");
+    else url.searchParams.set("status", filters.status);
+    if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
+  }, [filters.status]);
 
   const setBusy = (id: string, busy: boolean) =>
     setBusyIds((current) => {
@@ -98,6 +110,9 @@ export function JobsDashboard({ initialJobs, initialStore }: Props) {
   return (
     <div className="space-y-4">
       <StoreBanner store={store} />
+
+      {/* A finished search reloads the table, so its new matches show up right away. */}
+      <RunSearchPanel onFinished={() => void refresh()} />
 
       <div className="flex flex-wrap items-center gap-3">
         <ToggleGroup
@@ -163,7 +178,7 @@ export function JobsDashboard({ initialJobs, initialStore }: Props) {
               <TableRow>
                 <TableCell colSpan={HEADERS.length} className="text-muted-foreground h-24 text-center">
                   {jobs.length === 0
-                    ? "No jobs tracked yet. Run the search script in backend/ to populate the database."
+                    ? "No jobs tracked yet. Click Run search above (or run the search script in backend/) to populate the database."
                     : "No jobs match the current filters."}
                 </TableCell>
               </TableRow>

@@ -81,6 +81,21 @@ def test_save_matches_creates_unemailed_docs_with_details(store, db_path):
     assert store.load_unemailed_ids() == {"1", "2"}
 
 
+def test_save_matches_stores_the_fit_score(store, db_path):
+    job = make_job(
+        "1",
+        fit_score=71,
+        fit_breakdown={"skills": 41, "role": 30, "experience": 0, "remote": 0, "stack": 0},
+        fit_reasons=["Skills: Python, React (2 core)"],
+    )
+    store.save_matches([job], new_ids={"1"})
+
+    saved = read_db(db_path)["jobs"]["1"]
+    assert saved["fit_score"] == 71
+    assert saved["fit_breakdown"]["skills"] == 41
+    assert saved["fit_reasons"] == ["Skills: Python, React (2 core)"]
+
+
 def test_mark_emailed_flips_status_and_records_message_id(store):
     store.save_matches([make_job("1"), make_job("2")], new_ids={"1", "2"})
 
@@ -145,6 +160,47 @@ def test_set_status_records_applied_at_and_rejects_unknown(store):
         store.set_status("999", STATUS_APPLIED)
     with pytest.raises(ValueError, match="Unknown status"):
         store.set_status("1", "bogus")
+
+
+def test_update_job_sets_status_and_notes_like_the_dashboard(store, db_path):
+    store.save_matches([make_job("1")], new_ids={"1"})
+
+    updated = store.update_job("1", status=STATUS_APPLIED, notes="Applied via IG site")
+
+    assert updated["status"] == STATUS_APPLIED
+    assert isinstance(updated["applied_at"], datetime)
+    assert updated["status_updated_at"] == updated["applied_at"]
+    assert updated["notes"] == "Applied via IG site"
+    assert read_db(db_path)["jobs"]["1"]["notes"] == "Applied via IG site"
+
+
+def test_update_job_can_change_or_clear_notes_alone(store):
+    store.save_matches([make_job("1")], new_ids={"1"})
+    store.update_job("1", notes="Recruiter: Sam")
+    before = store.get_job("1")
+
+    cleared = store.update_job("1", notes="")
+
+    assert cleared["notes"] == ""
+    assert cleared["status"] == before["status"] == "unemailed"  # untouched
+    assert cleared["status_updated_at"] == before["status_updated_at"]
+
+
+def test_update_job_rejects_unknown_jobs_statuses_and_empty_updates(store):
+    store.save_matches([make_job("1")], new_ids={"1"})
+    with pytest.raises(KeyError, match="Job 999 is not in the store"):
+        store.update_job("999", status=STATUS_SKIPPED)
+    with pytest.raises(ValueError, match="Unknown status"):
+        store.update_job("1", status="bogus")
+    with pytest.raises(ValueError, match="Nothing to update"):
+        store.update_job("1")
+
+
+def test_list_job_documents_keeps_the_document_ids(store):
+    store.save_matches([make_job("a"), make_job("b")], new_ids={"a", "b"})
+    documents = dict(store.list_job_documents())
+    assert set(documents) == {"a", "b"}
+    assert documents["a"]["job_id"] == "a"
 
 
 def test_list_jobs_filters_by_status_and_sorts_newest_first(store):

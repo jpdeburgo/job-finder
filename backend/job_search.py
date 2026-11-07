@@ -28,6 +28,8 @@ from job_sites import (
     log,
     resolve_job_site,
 )
+from job_boards import ACCENTURE_SEARCH_URL, INSIGHT_GLOBAL_URL, JOB_SEARCH_URLS
+from job_fit import CandidateProfile, FitScore, fit_label, score_fit
 from job_store import FirestoreJobStore, get_job_store
 
 load_dotenv()
@@ -74,6 +76,44 @@ CORE_LANGUAGE_SKILLS = [
     "Node.js",
     "NodeJS",
 ]
+# Spellings of one skill; the fit score counts a job mentioning both once.
+SKILL_ALIASES = [
+    ("React", "ReactJS"),
+    ("Node.js", "NodeJS"),
+]
+# Your professional experience. The fit score compares it with the years a
+# job asks for (or its title implies: Senior ~5, Lead/Staff ~7), so set it to
+# your own number. MAX_YEARS_EXPERIENCE (below) is the hard cutoff.
+YEARS_OF_EXPERIENCE = 5
+# Title phrases for the roles you're after. A title with one of these scores
+# higher on fit than, say, "Network Engineer" or "Data Scientist" that happens
+# to mention your skills. GENERIC_ROLE_TITLES earn partial credit.
+TARGET_ROLE_TITLES = [
+    "Software Engineer",
+    "Software Developer",
+    "Software Development Engineer",
+    "Full Stack",
+    "Full-Stack",
+    "Fullstack",
+    "Backend",
+    "Back-End",
+    "Back End",
+    "Frontend",
+    "Front-End",
+    "Front End",
+    "Web Developer",
+    "Web Engineer",
+    "Application Developer",
+    "Applications Developer",
+    "Mobile Developer",
+    "Mobile Engineer",
+    "Product Engineer",
+    "API Engineer",
+    "API Developer",
+    "SDE",
+    "SWE",
+]
+GENERIC_ROLE_TITLES = ["Developer", "Programmer"]
 EXTRA_SEARCH_TERMS = [
     "Python Developer",
     "React Engineer",
@@ -214,22 +254,69 @@ MIN_SECONDS_BETWEEN_REQUESTS = 0.25
 # Sites that support a country filter (Workday boards such as Accenture's) are
 # narrowed to this country. Set to None to search every country.
 JOB_COUNTRY = "United States of America"
+# Greenhouse and Lever boards have no country filter, so with JOB_COUNTRY set
+# to the US, a job whose location names somewhere else (and not the US as
+# well) is dropped: "Remote - Canada", "Remote, EMEA", "Bengaluru, India".
+# Only whole countries/regions and a few unambiguous cities are listed;
+# most city names also exist in the US (London, KY; Dublin, OH; Paris, TX).
+US_COUNTRY_NAMES = {"united states of america", "united states", "usa", "us"}
+US_STATES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "DC": "District of Columbia", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii",
+    "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming", "PR": "Puerto Rico",
+}
+# A location naming any of these (or a US state) counts as US, so "Peru, IN"
+# and "New Mexico" stay; short codes only match in capitals.
+US_LOCATION_WORDS = [
+    "US", "USA", "U.S.", "U.S.A.", "United States", "America", "Americas",
+    "North America", "AMER", "NA", "New England",
+    *US_STATES, *US_STATES.values(),
+]
+NON_US_LOCATION_WORDS = [
+    # Regions
+    "EMEA", "APAC", "APJ", "LATAM", "Europe", "European Union", "EU", "Asia",
+    "Africa", "Middle East", "Oceania", "Latin America", "South America",
+    "Central America", "Caribbean",
+    # Countries
+    "Canada", "Mexico", "Brazil", "Argentina", "Colombia", "Chile", "Peru",
+    "Costa Rica", "Uruguay", "United Kingdom", "UK", "England", "Scotland",
+    "Wales", "Ireland", "Germany", "France", "Netherlands", "Belgium",
+    "Luxembourg", "Spain", "Portugal", "Italy", "Switzerland", "Austria",
+    "Poland", "Czech Republic", "Czechia", "Romania", "Hungary", "Bulgaria",
+    "Serbia", "Croatia", "Greece", "Ukraine", "Lithuania", "Latvia", "Estonia",
+    "Sweden", "Norway", "Denmark", "Finland", "Iceland", "Israel", "Turkey",
+    "Türkiye", "United Arab Emirates", "UAE", "Saudi Arabia", "Egypt",
+    "South Africa", "Nigeria", "Kenya", "India", "Pakistan", "Sri Lanka",
+    "Bangladesh", "China", "Hong Kong", "Taiwan", "Japan", "Korea",
+    "South Korea", "Singapore", "Malaysia", "Indonesia", "Philippines",
+    "Thailand", "Vietnam", "Australia", "New Zealand",
+    # Cities with no US namesake that job boards list without a country
+    "Toronto", "Montreal", "Montréal", "Bengaluru", "Bangalore", "Hyderabad",
+    "Pune", "Chennai", "Gurugram", "Gurgaon", "Noida", "Tel Aviv", "São Paulo",
+    "Sao Paulo", "Mexico City", "Ciudad de México",
+]
 
-# Careers/job search pages to scan. Both of these pages render their results
-# in the browser, so the jobs come from the JSON API behind each page;
-# job_sites.resolve_job_site works out which API a URL needs:
+# Careers/job search pages to scan live in job_boards.py (JOB_SEARCH_URLS).
+# Most of these pages render their results in the browser, so the jobs come
+# from the JSON API behind each page; job_sites.resolve_job_site works out
+# which API a URL needs:
 # * Insight Global: its own API on the same host (/all/jobs).
 # * Accenture: its Workday board (see KNOWN_CAREER_SITES in job_sites.py).
-# To add a company, append its careers URL. Workday
-# (<company>.wdN.myworkdayjobs.com/<site>), Greenhouse
-# (boards.greenhouse.io/<company>), and Lever (jobs.lever.co/<company>) board
-# URLs work as-is, and so do careers pages that link to one of those boards.
-INSIGHT_GLOBAL_URL = "https://insightglobal.com/jobs/search/all/all"
-ACCENTURE_SEARCH_URL = "https://www.accenture.com/us-en/careers/jobsearch"
-JOB_SEARCH_URLS = [
-    INSIGHT_GLOBAL_URL,
-    ACCENTURE_SEARCH_URL,
-]
+# * Workday (<company>.wdN.myworkdayjobs.com/<site>), Greenhouse
+#   (boards.greenhouse.io/<company>), and Lever (jobs.lever.co/<company>)
+#   board URLs work as-is, and so do careers pages that link to one of those.
+# To add a company, add its URL to job_boards.py and to JOB_SEARCH_URLS there.
+
 # Per-URL overrides of a site's filters: "remote_only" (defaults to
 # REMOTE_ONLY), "include_unmarked_remote" (defaults to INCLUDE_UNMARKED_REMOTE),
 # and "contract_only" (on for Insight Global, off elsewhere), e.g.
@@ -308,10 +395,22 @@ class JobMatch:
     matched_skills: list[str] = field(default_factory=list)
     min_years: int | None = None
     company: str = ""
+    # How well the job fits you, 0-100 (see job_fit.py). None only for matches
+    # built outside evaluate_posting.
+    fit_score: int | None = None
+    # The points behind fit_score ({"skills": 48, "role": 30, "experience": -8,
+    # ...}; they add up to it), and the same in words.
+    fit_breakdown: dict[str, int] = field(default_factory=dict)
+    fit_reasons: list[str] = field(default_factory=list)
 
     @property
     def score(self) -> int:
+        """The number of matched skills (the track's threshold uses it)."""
         return len(self.matched_skills)
+
+    @property
+    def fit_label(self) -> str:
+        return fit_label(self.fit_score)
 
 
 def _contains_skill(text: str, skill: str) -> bool:
@@ -374,6 +473,41 @@ def _is_placeholder_listing(title: str) -> bool:
 def _title_names_growth_stack(title: str) -> bool:
     """Return True when the title names a Java/iOS/.NET growth-track stack."""
     return any(_contains_skill(title, stack) for stack in GROWTH_TRACK_TITLE_STACKS)
+
+
+def _is_outside_job_country(posting: Posting) -> bool:
+    """Return True when the location names a place outside the US and not the US too.
+
+    Only used when JOB_COUNTRY is the US. Workday boards are already narrowed
+    by their own country filter; this covers boards that have none.
+    """
+    if str(JOB_COUNTRY or "").strip().lower() not in US_COUNTRY_NAMES:
+        return False
+    # Case-sensitive for short codes ("US", "UK", "EU", "NA") so "us" or "na"
+    # inside ordinary words or city names can't match; full names either way.
+    location = f"{posting.city}, {posting.state}"
+
+    def mentions(words: list[str]) -> bool:
+        for word in words:
+            flags = 0 if len(word) <= 4 and word.isupper() else re.IGNORECASE
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", location, flags):
+                return True
+        return False
+
+    return mentions(NON_US_LOCATION_WORDS) and not mentions(US_LOCATION_WORDS)
+
+
+def candidate_profile() -> CandidateProfile:
+    """Your profile for the fit score, from the settings at the top of this file."""
+    return CandidateProfile(
+        skills=tuple(RESUME_SKILLS),
+        core_skills=tuple(CORE_LANGUAGE_SKILLS),
+        years_experience=YEARS_OF_EXPERIENCE,
+        target_roles=tuple(TARGET_ROLE_TITLES),
+        generic_roles=tuple(GENERIC_ROLE_TITLES),
+        unfamiliar_tech=tuple(NON_RESUME_TITLE_TECH),
+        skill_aliases=tuple(tuple(group) for group in SKILL_ALIASES),
+    )
 
 
 def _parse_posted_date(value: Any) -> datetime | None:
@@ -600,6 +734,8 @@ def _passes_listing_filters(
         return False
     if _is_bogus_alaska_location(posting.state, posting.city):
         return False
+    if _is_outside_job_country(posting):
+        return False
     if _is_placeholder_listing(title):
         return False
     if _has_unfamiliar_title_tech(title):
@@ -637,6 +773,7 @@ def evaluate_posting(posting: Posting, site: JobSite, track: SearchTrack) -> Job
     ):
         return None
 
+    fit: FitScore = score_fit(posting, candidate_profile(), min_years)
     return JobMatch(
         job_id=posting.job_id,
         title=posting.title,
@@ -652,6 +789,9 @@ def evaluate_posting(posting: Posting, site: JobSite, track: SearchTrack) -> Job
         matched_skills=matched_skills,
         min_years=min_years,
         company=posting.company,
+        fit_score=fit.score,
+        fit_breakdown=dict(fit.breakdown),
+        fit_reasons=list(fit.reasons),
     )
 
 
@@ -790,16 +930,18 @@ def run_all_searches(
 
     track_order = {track.name: index for index, track in enumerate(TRACKS)}
 
-    def sort_key(job: JobMatch) -> tuple[int, str]:
+    def sort_key(job: JobMatch) -> tuple[int, int, str]:
         order = track_order[job.track]
-        # Negate the date string so that later dates sort first within each
-        # track (ISO-format dates compare lexicographically).
+        # Best fit first within each track, then newest first.
+        fit = -(job.fit_score if job.fit_score is not None else -1)
+        # Negate the date string so that later dates sort first
+        # (ISO-format dates compare lexicographically).
         inverted_date = (
             "".join(chr(0xFF - ord(c)) for c in job.posted_date)
             if job.posted_date
             else "\xff"  # push undated jobs to the end
         )
-        return order, inverted_date
+        return order, fit, inverted_date
 
     return sorted(all_matches.values(), key=sort_key)
 
@@ -852,12 +994,18 @@ def build_email_body(jobs: list[JobMatch]) -> str:
             else ""
         )
         company = f"{html_module.escape(job.company)} &nbsp;|&nbsp; " if job.company else ""
+        fit = (
+            f"<strong>Fit {job.fit_score}/100 ({job.fit_label})</strong> &nbsp;|&nbsp; "
+            if job.fit_score is not None
+            else ""
+        )
         remote = REMOTE_LABELS[job.is_remote]
         location = ", ".join(part for part in (job.city, job.state) if part)
         lines.append(
             f'<p><a href="{html_module.escape(job.url)}">'
             f"{html_module.escape(job.title)}</a> "
             f"({html_module.escape(skill_text)})<br>"
+            f"{fit}"
             f"{company}"
             f"{html_module.escape(location or 'Location not listed')}"
             f" &nbsp;|&nbsp; {remote}"
@@ -895,11 +1043,30 @@ def _email_setup() -> tuple[Any, str]:
     return get_gmail_service(), recipient
 
 
+@dataclass
+class RunSummary:
+    """What one run did; returned by ``main()`` (the API reports it to the dashboard)."""
+
+    total_matches: int
+    new_matches: int
+    # Jobs in this run's digest: the new ones plus any an earlier run failed to email.
+    emailed_matches: int
+    email_sent: bool
+    gmail_message_id: str | None = None
+    # Set when the digest was skipped because Gmail / IG_EMAIL_TO isn't set up.
+    email_skipped_reason: str | None = None
+
+
 def main(
     store: FirestoreJobStore | None = None,
     site_selectors: list[str] | None = None,
     include_unmarked: bool = False,
-) -> None:
+) -> RunSummary:
+    """Search, save every match, and email the new ones.
+
+    Shared by the command line (``python job_search.py``, which the cron job
+    runs) and the HTTP API (``api.py``, which the dashboard calls).
+    """
     store = store or get_job_store()
     print(f"Job state: {store.description}")
     seen_ids = store.load_seen_ids()
@@ -948,7 +1115,13 @@ def main(
                 f"{len(to_email)} job(s) stay 'unemailed' and will be emailed on the "
                 "first run after Gmail is set up (see README.md, Gmail API setup)."
             )
-            return
+            return RunSummary(
+                total_matches=len(all_matches),
+                new_matches=len(brand_new),
+                emailed_matches=0,
+                email_sent=False,
+                email_skipped_reason=str(error),
+            )
         except Exception as error:
             store.log_run(
                 total_matches=len(all_matches),
@@ -966,6 +1139,13 @@ def main(
     store.log_run(
         total_matches=len(all_matches),
         new_job_ids=sorted(job.job_id for job in to_email),
+        email_sent=message_id is not None,
+        gmail_message_id=message_id,
+    )
+    return RunSummary(
+        total_matches=len(all_matches),
+        new_matches=len(brand_new),
+        emailed_matches=len(to_email) if message_id is not None else 0,
         email_sent=message_id is not None,
         gmail_message_id=message_id,
     )

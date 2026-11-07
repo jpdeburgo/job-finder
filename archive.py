@@ -56,6 +56,8 @@ EXCLUDED_NAMES = frozenset(
         "__MACOSX",
         ".DS_Store",
         ".idea",
+        # apply_update.py's backups of the files an update replaced
+        ".update-backups",
     }
 )
 # Glob patterns matched against the file/directory name.

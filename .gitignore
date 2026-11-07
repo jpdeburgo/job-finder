@@ -240,6 +240,8 @@ coverage/
 
 # Archives written by archive.py
 job-finder-*.zip
+# Backups apply_update.py makes before changing files
+.update-backups/
 
 # Firebase emulator state and logs (firebase.json, emulator exports)
 .firebase/

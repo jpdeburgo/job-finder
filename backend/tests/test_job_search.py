@@ -40,12 +40,12 @@ def test_api_and_job_urls_derive_from_the_search_page_url():
     )
 
 
-def test_job_search_urls_lists_insight_global_and_accenture():
+def test_tests_search_insight_global_and_accenture():
+    # tests/conftest.py pins these two; tests/test_job_boards.py checks the real list.
     assert job_search.JOB_SEARCH_URLS == [
         "https://insightglobal.com/jobs/search/all/all",
         "https://www.accenture.com/us-en/careers/jobsearch",
     ]
-    assert job_search.ACCENTURE_SEARCH_URL in job_search.JOB_SEARCH_URLS
 
 
 def test_java_skill_does_not_match_javascript():
@@ -250,6 +250,29 @@ def test_main_without_gmail_set_up_prints_an_error_and_keeps_jobs(
     (subject, body, _) = gmail[-1]
     assert subject == "Job search: 2 new job match(es)"
     assert store.load_unemailed_ids() == set()
+
+
+def test_main_returns_a_summary_of_the_run(store, gmail, monkeypatch):
+    """The API (api.py) reports this summary to the dashboard."""
+    monkeypatch.delenv("IG_REQUIRE_EMAIL", raising=False)
+    store.save_matches([_job("id-1")], new_ids={"id-1"})
+    store.mark_emailed(["id-1"], "earlier")
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1"), _job("id-2")])
+
+    assert job_search.main(store) == job_search.RunSummary(
+        total_matches=2, new_matches=1, emailed_matches=1, email_sent=True, gmail_message_id="msg-1"
+    )
+    # Nothing new the second time.
+    assert job_search.main(store) == job_search.RunSummary(
+        total_matches=2, new_matches=0, emailed_matches=0, email_sent=False
+    )
+
+    monkeypatch.setattr(job_search, "get_gmail_service", _gmail_not_set_up)
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-3")])
+    summary = job_search.main(store)
+    assert (summary.total_matches, summary.new_matches, summary.email_sent) == (1, 1, False)
+    assert summary.emailed_matches == 0
+    assert summary.email_skipped_reason.startswith("Gmail OAuth client secret not found")
 
 
 def test_main_without_a_recipient_prints_an_error(store, gmail, monkeypatch, capsys):

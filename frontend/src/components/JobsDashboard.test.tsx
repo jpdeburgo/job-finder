@@ -1,12 +1,18 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_FILTERS } from "@/lib/jobs";
 import type { Job, StoreInfo } from "@/lib/types";
-import { makeJob } from "@/test/factories";
+import { makeFinishedRun, makeJob, makeRun } from "@/test/factories";
 import { setupUser } from "@/test/user";
 import { JobsDashboard } from "./JobsDashboard";
 
+// Job calls go to fetchMock (tests queue its responses); the search panel's
+// /api/runs calls go to runsApiMock, so they never consume a queued response.
 const fetchMock = vi.fn();
-vi.stubGlobal("fetch", fetchMock);
+const runsApiMock = vi.fn();
+vi.stubGlobal("fetch", (...args: [string, RequestInit?]) =>
+  String(args[0]).startsWith("/api/runs") ? runsApiMock(...args) : fetchMock(...args),
+);
 
 const store: StoreInfo = {
   backend: "local",
@@ -59,6 +65,8 @@ async function choose(user: ReturnType<typeof setupUser>, trigger: HTMLElement, 
 
 beforeEach(() => {
   fetchMock.mockReset();
+  runsApiMock.mockReset();
+  runsApiMock.mockImplementation(async () => jsonResponse({ run: null })); // no search run yet
 });
 
 afterEach(() => {
@@ -253,6 +261,34 @@ describe("filtering and sorting", () => {
     await choose(user, screen.getByRole("combobox", { name: "Sort" }), "Title (A–Z)");
     expect(rowIds()).toEqual(["job-row-java", "job-row-react", "job-row-python"]);
   });
+
+  it("sorts by best fit, unscored jobs last", async () => {
+    const user = setupUser();
+    renderDashboard([
+      makeJob({ id: "unscored", title: "Old", fit_score: null, last_seen_at: "2026-11-06T13:00:00+00:00" }),
+      makeJob({ id: "weak", title: "Weak", fit_score: 30, last_seen_at: "2026-11-05T13:00:00+00:00" }),
+      makeJob({ id: "strong", title: "Strong", fit_score: 88, last_seen_at: "2026-11-01T13:00:00+00:00" }),
+    ]);
+
+    await choose(user, screen.getByRole("combobox", { name: "Sort" }), "Best fit");
+
+    expect(rowIds()).toEqual(["job-row-strong", "job-row-weak", "job-row-unscored"]);
+  });
+
+  it("sorts by salary with \"Not listed\" jobs at the bottom", async () => {
+    const user = setupUser();
+    renderDashboard([
+      makeJob({ id: "unlisted", title: "Unlisted", salary_low: 0, salary_high: 0, last_seen_at: "2026-11-06T13:00:00+00:00" }),
+      makeJob({ id: "from", title: "From only", salary_low: 140000, salary_high: 0, last_seen_at: "2026-11-01T13:00:00+00:00" }),
+      makeJob({ id: "range", title: "Range", salary_low: 55, salary_high: 65, last_seen_at: "2026-11-02T13:00:00+00:00" }),
+    ]);
+    expect(rowIds()[0]).toBe("job-row-unlisted"); // newest first by default
+
+    await choose(user, screen.getByRole("combobox", { name: "Sort" }), "Salary (highest)");
+
+    expect(rowIds()).toEqual(["job-row-from", "job-row-range", "job-row-unlisted"]);
+    expect(row("unlisted").getByText("Not listed")).toBeInTheDocument();
+  });
 });
 
 describe("updating jobs", () => {
@@ -322,6 +358,39 @@ describe("details drawer", () => {
     expect(details.getByText("AWS")).toBeInTheDocument();
     expect(details.getByText("Core matches (your main stack)")).toBeInTheDocument();
     expect(details.getByRole("button", { name: "Mark applied" })).toBeDisabled(); // already applied
+  });
+
+  it("explains the fit score", async () => {
+    const user = setupUser();
+    renderDashboard([
+      makeJob({
+        id: "fit",
+        title: "Full Stack Engineer",
+        fit_score: 66,
+        fit_breakdown: { skills: 48, role: 30, experience: -8, remote: 0, stack: -4 },
+        fit_reasons: ["Skills: Python, React (2 core)", "Asks for 6+ yrs; you have 5 (1 short)"],
+      }),
+    ]);
+    expect(row("fit").getByLabelText("Fit 66 of 100, Good")).toHaveTextContent("66 · Good");
+
+    await user.click(row("fit").getByRole("button", { name: /Show details/ }));
+    const fit = within(within(await screen.findByRole("dialog")).getByTestId("fit-details"));
+
+    expect(fit.getByText("66 · Good")).toBeInTheDocument();
+    expect(fit.getByText("+48")).toBeInTheDocument();
+    expect(fit.getByText("+30")).toBeInTheDocument();
+    expect(fit.getByText("−8")).toBeInTheDocument();
+    expect(fit.getByText("−4")).toBeInTheDocument();
+    expect(fit.getByText("Asks for 6+ yrs; you have 5 (1 short)")).toBeInTheDocument();
+  });
+
+  it("shows a dash, and no fit section, for jobs saved before the fit score existed", async () => {
+    const user = setupUser();
+    renderDashboard([makeJob({ id: "old", fit_score: null, fit_breakdown: {}, fit_reasons: [] })]);
+    expect(row("old").getByTitle(/Not scored/)).toHaveTextContent("—");
+
+    await user.click(row("old").getByRole("button", { name: /Show details/ }));
+    expect(within(await screen.findByRole("dialog")).queryByTestId("fit-details")).not.toBeInTheDocument();
   });
 
   it("saves notes and keeps the drawer open with the saved value", async () => {
@@ -440,5 +509,62 @@ describe("refresh", () => {
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not refresh: boom");
     expect(screen.getByTestId("job-row-react")).toBeInTheDocument();
+  });
+});
+
+describe("running a search", () => {
+  it("starts a search and reloads the jobs when it finishes", async () => {
+    const user = setupUser();
+    const running = makeRun();
+    const done = makeFinishedRun();
+    runsApiMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === "/api/runs" && init?.method === "POST") return jsonResponse({ run: running }, 202);
+      if (url === "/api/runs/abc123") return jsonResponse({ run: done });
+      return jsonResponse({ run: null });
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ store, jobs: [makeJob({ id: "fresh", title: "Fresh Job" })] }));
+    renderDashboard();
+
+    await user.click(await screen.findByRole("button", { name: "Run search" }));
+    expect(screen.getByRole("button", { name: "Searching…" })).toBeDisabled();
+
+    // The panel checks on the run every 2s; once it's done, the table reloads.
+    expect(await screen.findByText("Fresh Job", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/jobs", { cache: "no-store" });
+    expect(screen.getByText(/4 matches, 1 new\. Emailed 1 job\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run search" })).toBeEnabled();
+  }, 10_000);
+});
+
+describe("status in the address bar", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/jobs"));
+
+  it("starts filtered when opened from a home-screen link (/jobs?status=applied)", () => {
+    window.history.replaceState(null, "", "/jobs?status=applied");
+    render(<JobsDashboard initialJobs={jobs} initialStore={store} initialFilters={{ ...DEFAULT_FILTERS, status: "applied" }} />);
+    expect(rowIds()).toEqual(["job-row-python"]);
+    expect(screen.getByRole("combobox", { name: "Status" })).toHaveTextContent("Applied");
+    expect(window.location.search).toBe("?status=applied");
+  });
+
+  it("keeps ?status= in step with the status filter", async () => {
+    const user = setupUser();
+    renderDashboard();
+    expect(window.location.search).toBe("");
+
+    await user.click(chips().getByRole("radio", { name: /Skipped 1/ }));
+    expect(window.location.pathname + window.location.search).toBe("/jobs?status=skipped");
+
+    await choose(user, screen.getByRole("combobox", { name: "Status" }), "All statuses");
+    expect(window.location.pathname + window.location.search).toBe("/jobs");
+  });
+
+  it("leaves other query parameters alone", async () => {
+    window.history.replaceState(null, "", "/jobs?utm=digest");
+    const user = setupUser();
+    renderDashboard();
+    await user.click(chips().getByRole("radio", { name: /Applied 1/ }));
+    expect(new URLSearchParams(window.location.search).get("utm")).toBe("digest");
+    expect(new URLSearchParams(window.location.search).get("status")).toBe("applied");
   });
 });

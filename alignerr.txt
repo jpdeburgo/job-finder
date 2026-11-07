@@ -1,13 +1,15 @@
-Task brief · for the reviewer
-Task description *
-What you are trying to get done in this session, for a reviewer who was not there.
+Description:
+I want to incorporate more job boards into my job search. I have added a few constant variables that have job boards in the backend/job_boards.py file. I want them to all be used. I will also need to start coming up with a metric that can correctly identify which jobs would fit the user the best, so I will ask to do that to. 
 
-I want the backend script to be able to look through Accenture's job site. Eventually, I plan on making this project be able to search through any job site with the user being able to add the sites or companies they want to apply to. Maybe the app will have a database of companies and already know their sites. I added an ACCENTURE_SEARCH_URL variable. I want to start using it when doing the job search. The point is to be able to search both insight global and Accenture
-How to judge completion *
-What a correct result looks like, for a reviewer who was not there: where to look (a command to run, a file, a feature to try), what to look for, and what counts as a pass.
+Completeion:
+Run these commands in two different terminals:
+cd backend/ && pipenv install && pipenv run python job_search.py --local && pipenv run uvicorn api:app --reload 
 
-This will be complete when the app can search Accenture for jobs. You can check by running pipenv run python job_search.py. Once that finishes, local_firestore.json should be filled with Accenture and Insight Global jobs
+cd frontend/ && npm install && npm run dev
 
+You can judge this is complete by checking in backend/local_firestore.json and seeing that there are more than two companies. These companies should also reflect in the UI. There should also be a new column that reflects how much of a match you are with that job based off of your skills listed in RESUME_SKILLS in backend/job_search.py
 
-Next Prompt:
-Add a filter for company in the UI
+Next Prompts:
+1. Add pagination to the UI too. 
+2. I should be able to filter and sort the results based on compatibility in the UI
+3. Add an api endpoint that only grabs the most compatible jobs. Or make it so it only gets jobs that pass a compatibility score

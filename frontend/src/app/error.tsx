@@ -4,7 +4,7 @@ import { AlertCircleIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
-/** Last-resort error boundary for the dashboard route. */
+/** Last-resort error boundary for every page (home and jobs). */
 export default function ErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   return (
     <Alert variant="destructive">
