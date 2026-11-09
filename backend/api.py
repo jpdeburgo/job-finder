@@ -21,7 +21,8 @@ Endpoints::
     GET   /jobs           tracked jobs, filtered, sorted, and paged (see list_jobs below)
     GET   /jobs/stats     counts by status, company, track, and remote (same filters)
     GET   /jobs/{job_id}  one job                                   404 if it isn't tracked
-    PATCH /jobs/{job_id}  {"status": "applied", "notes": "..."} -> the updated job
+    PATCH /jobs/{job_id}  {"status": "applied", "notes": "...", "work_arrangement": "on_site"}
+                          -> the updated job
 
 Only one search runs at a time, and run history lives in memory, so start
 the server with a single worker (uvicorn's default). Set ``IG_API_TOKEN`` to
@@ -330,7 +331,13 @@ class Job(BaseModel):
     title: str | None
     city: str | None
     state: str | None
-    is_remote: bool | None = Field(description="null when the site doesn't say")
+    is_remote: bool | None = Field(
+        description="null when the site doesn't say; follows work_arrangement when you've set it"
+    )
+    work_arrangement: str | None = Field(
+        description='How you say the job is worked: "remote", "hybrid", "on_site"; null if you haven\'t'
+    )
+    site_is_remote: bool | None = Field(description="What the site says, before your work_arrangement")
     job_type: str | None
     salary_low: float | None
     salary_high: float | None
@@ -347,6 +354,10 @@ class Job(BaseModel):
         description='Points behind fit_score, e.g. {"skills": 48, "role": 30, "experience": -8}; they add up to it'
     )
     fit_reasons: list[str] = Field(description="The same breakdown in words")
+    not_remote_reason: str | None = Field(
+        description="Why the job was marked not remote although its site said remote, "
+        'e.g. \'its description: "must be onsite in Dallas"\''
+    )
     status: str
     notes: str | None
     first_seen_at: str | None
@@ -354,6 +365,7 @@ class Job(BaseModel):
     emailed_at: str | None
     applied_at: str | None
     status_updated_at: str | None
+    work_arrangement_set_at: str | None
     gmail_message_id: str | None
 
 
@@ -381,6 +393,10 @@ class JobUpdate(BaseModel):
         default=None,
         max_length=MAX_NOTES_LENGTH,
         description='Replaces the notes; "" or null clears them.',
+    )
+    work_arrangement: Literal["remote", "hybrid", "on_site"] | None = Field(
+        default=None,
+        description="How the job is really worked, whatever the site says; null goes back to the site's word.",
     )
 
 
@@ -554,13 +570,20 @@ def create_app(
         """Change a job's status and/or notes, exactly like the dashboard does
         (status also sets status_updated_at, and applied_at for "applied")."""
         notes = (body.notes or "").strip() if "notes" in body.model_fields_set else None
-        if body.status is None and notes is None:
+        arrangement_given = "work_arrangement" in body.model_fields_set
+        if body.status is None and notes is None and not arrangement_given:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="Nothing to update: provide status and/or notes",
+                detail="Nothing to update: provide status, notes, and/or work_arrangement",
             )
         try:
-            data = store.update_job(job_id, status=body.status, notes=notes)
+            data = store.update_job(
+                job_id,
+                status=body.status,
+                notes=notes,
+                work_arrangement=body.work_arrangement,
+                clear_work_arrangement=arrangement_given and body.work_arrangement is None,
+            )
         except KeyError:
             raise _job_not_found(job_id) from None
         return {"job": normalize_job(job_id, data)}

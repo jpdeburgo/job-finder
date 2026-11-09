@@ -19,6 +19,9 @@ def two_configured_sites(request, monkeypatch):
     these two sites; pinning them keeps those tests independent of the boards
     listed in job_boards.py. tests/test_job_boards.py checks the real list.
     """
+    # Re-checking saved jobs loads their postings; tests that want it call
+    # recheck_saved_jobs directly with a fake session.
+    monkeypatch.setattr(job_search, "RECHECK_SAVED_JOBS", False)
     if request.node.get_closest_marker("real_boards"):
         return
     monkeypatch.setattr(

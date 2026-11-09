@@ -1,6 +1,7 @@
 "use client";
 
 import { CheckIcon, PanelRightOpenIcon } from "lucide-react";
+import { memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -16,11 +17,15 @@ interface Props {
   job: Job;
   selected: boolean;
   busy: boolean;
-  onSelect: () => void;
-  onStatusChange: (status: JobStatus) => void;
+  // Take the job's ID, so the dashboard can pass the same functions to every
+  // row and a row whose job hasn't changed skips re-rendering (memo below).
+  onSelect: (id: string) => void;
+  onStatusChange: (id: string, status: JobStatus) => void;
 }
 
-export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props) {
+/** One job in the tracker table. Memoized: typing in the search box or
+ * paging doesn't re-render rows whose job, selection, and busy state are unchanged. */
+export const JobRow = memo(function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props) {
   const applied = hasApplied(job);
   const name = job.title ?? job.job_id;
 
@@ -30,7 +35,7 @@ export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props)
         <Button
           variant="ghost"
           size="icon-sm"
-          onClick={onSelect}
+          onClick={() => onSelect(job.id)}
           aria-label={`Show details for ${name}`}
           aria-pressed={selected}
         >
@@ -83,7 +88,7 @@ export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props)
       <TableCell className="text-muted-foreground">{formatDate(job.last_seen_at)}</TableCell>
 
       <TableCell>
-        <StatusSelect jobId={job.id} value={job.status} disabled={busy} onChange={onStatusChange} />
+        <StatusSelect jobId={job.id} value={job.status} disabled={busy} onChange={(status) => onStatusChange(job.id, status)} />
       </TableCell>
 
       <TableCell>
@@ -100,7 +105,7 @@ export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props)
             variant="outline"
             size="sm"
             disabled={busy}
-            onClick={() => onStatusChange("applied")}
+            onClick={() => onStatusChange(job.id, "applied")}
             className="text-green-700 dark:text-green-400"
           >
             Mark applied
@@ -109,4 +114,4 @@ export function JobRow({ job, selected, busy, onSelect, onStatusChange }: Props)
       </TableCell>
     </TableRow>
   );
-}
+});

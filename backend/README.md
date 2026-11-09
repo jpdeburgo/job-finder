@@ -90,9 +90,75 @@ three remote statuses, saved in its `is_remote` field:
 
 Where the status comes from: Insight Global's `workRemote`; Workday's
 `remoteType` (only on the job's details page, so every Workday posting gets a
-details request) or a location saying "Remote"; Lever's `workplaceType`, with
-the location as a fallback; and Greenhouse's location text, since Greenhouse
-has no remote field. About half of Accenture's US postings are unmarked, and
+details request; it overrides a "Remote" location in the search results) or a
+location saying "Remote"; Lever's `workplaceType`, with the location as a
+fallback; and for Greenhouse, the company's own "Workplace Type" field if it
+has one, else the location text.
+
+Those flags are often wrong, so two more things are checked. Any other
+work-arrangement field in a site's data (`workType`, `isHybrid`,
+`remoteWork: "No"`, `workLocation.type`, ...; `structured_remote` in
+`job_sites.py`), or any field whose whole value is an arrangement (a badge or
+tag like "Onsite" or "Hybrid"), wins over the main flag when it says on-site
+or hybrid. Yes/no flags are read as sites send them (`true`, `"false"`,
+`"No"`, `1`). And every posting is **read for an on-site
+or hybrid requirement** once its details are loaded (`onsite_evidence`). A job is treated as not remote, whatever its site says, when
+its title says "On-Site", "Onsite", "In-Office", or "Hybrid"; its location
+says hybrid or on-site; or its description says so outright, e.g. "This role
+is onsite in Dallas", "a hybrid position", "must be onsite", "3 days a week in
+office", "Work arrangement: Hybrid", or "This is not a remote position". Only
+clear statements count: benefits ("on-site gym"), occasional visits ("onsite
+once a quarter", "travel to the office for onboarding"), choices ("remote or
+hybrid"), answers in the negative ("Onsite: No"), and tech ("Hybrid Cloud
+Engineer") don't. Descriptions keep their line breaks, so a line that is just
+a label ("Onsite", "Hybrid - Dallas, TX", "100% Onsite") counts, and so does
+recruiter shorthand: "Onsite in Atlanta", "(Hybrid)", "will sit onsite",
+"onsite 3x a week", "No remote.".
+
+To see how one job is read, and why, check it by URL or by its saved job ID:
+
+```bash
+pipenv run python job_search.py --check-remote https://insightglobal.com/jobs/<id>
+pipenv run python job_search.py --check-remote insight-global-<id>     # a saved job
+```
+
+It prints the verdict, every field in the site's data, and the description
+lines about where you'd work. If a job says on-site and the verdict is
+"remote", that output shows exactly what the check missed. Each job dropped this way
+is printed with the words that gave it away, e.g.
+
+```
+Insight Global: 'React Developer' (insight-global-...) is marked remote but its
+description: "This position is onsite in Plano, TX"; treating it as not remote.
+```
+
+Jobs saved before a check existed are corrected too. After each search, every
+saved job still marked remote that the search didn't check (postings it
+didn't see again: closed, or past the pages it reads) has its posting loaded
+and checked the same way (`RECHECK_SAVED_JOBS`). Any that turn out on-site or
+hybrid are set to not remote, with the reason in `not_remote_reason` (shown in
+the dashboard's details drawer); their status is left alone. To do just that,
+without searching or emailing:
+
+```bash
+pipenv run python job_search.py --recheck-saved                 # every saved remote job
+pipenv run python job_search.py --recheck-saved --site insight-global
+```
+
+It prints each job it marks not remote, and writes every re-checked job's
+verdict, site fields, and description lines to `remote_check_report.txt`.
+For Insight Global, a job's details leave out `workRemote`, so each re-check
+also finds the job's own entry in Insight Global's search results (by its
+title, with the remote filter off) and reads its flags there.
+
+**When the checks get it wrong, say so yourself.** Mark a job On-site, Hybrid,
+or Remote in the dashboard (the **Work arrangement** menu in its details
+drawer), with `jobs_cli.py onsite|hybrid|remote <job id>`, or with
+`PATCH /jobs/<id> {"work_arrangement": "on_site"}`. Your choice is saved as
+`work_arrangement`, next to the site's `is_remote`, and wins everywhere the
+job is read: the Remote filter, labels, stats, and the API. Searches and
+re-checks never change it. Choose "As the site says" (or `jobs_cli.py
+arrangement <job id> site`) to go back to the site's word. About half of Accenture's US postings are unmarked, and
 about 1 in 10 is marked remote.
 
 To see the unmarked ones too:
@@ -409,6 +475,8 @@ fields:
 | `emailed_at`, `gmail_message_id` | Set once Gmail accepts the digest. |
 | `last_seen_at` | Refreshed every run the job still matches, so you can tell when a posting disappears. |
 | `applied_at`, `status_updated_at`, `notes` | Set when you change the status. |
+| `work_arrangement`, `work_arrangement_set_at` | How you say the job is worked (`remote`, `hybrid`, `on_site`), overriding the site's `is_remote`; searches never change it. |
+| `not_remote_reason` | Why the search marked a job the site called remote as not remote. |
 
 Matches are saved **before** the email goes out, as `unemailed`, then flipped
 to `emailed` once Gmail accepts the digest. If the send fails, nothing is lost:
@@ -429,6 +497,9 @@ pipenv run python jobs_cli.py show insight-global-6a506de5-fa1b-4df7-b3a1-b4e2df
 pipenv run python jobs_cli.py applied insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba --note "Applied via IG site"
 pipenv run python jobs_cli.py skip insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba
 pipenv run python jobs_cli.py status insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba interviewing
+pipenv run python jobs_cli.py onsite insight-global-98f09cc8-df65-482e-9fff-701b877de516   # not actually remote
+pipenv run python jobs_cli.py hybrid accenture-R00212345
+pipenv run python jobs_cli.py arrangement accenture-R00212345 site   # back to what the site says
 ```
 
 ## Render deployment

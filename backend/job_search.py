@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import re
 import sys
@@ -12,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -26,6 +28,7 @@ from job_sites import (
     UnsupportedSiteError,
     contains_phrase,
     log,
+    onsite_evidence,
     resolve_job_site,
 )
 from job_boards import ACCENTURE_SEARCH_URL, INSIGHT_GLOBAL_URL, JOB_SEARCH_URLS
@@ -322,6 +325,10 @@ NON_US_LOCATION_WORDS = [
 # and "contract_only" (on for Insight Global, off elsewhere), e.g.
 #   ACCENTURE_SEARCH_URL: {"include_unmarked_remote": True},
 SITE_SETTINGS: dict[str, dict[str, bool]] = {}
+# After each search, load and re-check saved jobs marked remote that the
+# search didn't see again (see recheck_saved_jobs).
+RECHECK_SAVED_JOBS = True
+REMOTE_CHECK_REPORT = Path(__file__).with_name("remote_check_report.txt")
 HEADERS = {"User-Agent": "job-finder/1.0 (+personal job search)"}
 YEARS_EXPERIENCE_PATTERN = re.compile(
     r"(\d+)\s*(?:-\s*\d+\s*)?\+?\s*years?\b.{0,60}?(?:experience|exp\b)",
@@ -800,6 +807,41 @@ class SiteSearchResult:
     matches: list[JobMatch]
     searches: int
     failed_terms: list[str]
+    # Jobs the site didn't mark on-site whose posting says they are:
+    # job ID -> why (see check_work_arrangement).
+    onsite: dict[str, str] = field(default_factory=dict)
+    # Every job whose remote status this search checked.
+    checked: set[str] = field(default_factory=set)
+
+
+def _describe_evidence(why: str) -> str:
+    """A phrase for logs and the dashboard: 'its title says "On-Site"',
+    'its description: "..."', 'the site's workSetting = "Onsite"'."""
+    if why.startswith(("its ", "the site")):
+        return why  # already described
+    if why.startswith(("title ", "description", "location ")):
+        return f"its {why}"
+    return f"the site's {why}" if "=" in why else why
+
+
+def check_work_arrangement(posting: Posting) -> tuple[Posting, str | None, bool]:
+    """Mark a posting not remote when its title, location, or description says
+    it's on-site or hybrid, whatever the site's own remote flag says.
+
+    Returns ``(posting, why, overridden)``: the posting (updated if needed);
+    why it isn't remote, or None if it is (or may be); and whether that
+    contradicts the site's main remote flag (worth logging).
+    """
+    if posting.is_remote is False:
+        if posting.remote_note:
+            return posting, posting.remote_note, True
+        return posting, "the site marks it hybrid or on-site", False
+    evidence = onsite_evidence(
+        posting.title, posting.description, ", ".join(p for p in (posting.city, posting.state) if p)
+    )
+    if evidence is None:
+        return posting, None, False
+    return dataclasses.replace(posting, is_remote=False, remote_note=evidence), evidence, True
 
 
 def search_site(
@@ -835,8 +877,16 @@ def search_site(
             failed_terms.append(term)
 
     to_fetch: dict[str, Posting] = {}
+    onsite: dict[str, str] = {}
     for (track, _), postings, _ in listed:
         for posting in postings or []:
+            if posting.is_remote is False and posting.job_id not in onsite:
+                # Dropped before its details load, but a saved copy may still
+                # say remote (correct_saved_remote_flags fixes it from this).
+                onsite[posting.job_id] = posting.remote_note or "the site marks it hybrid or on-site"
+                if posting.remote_note:
+                    log(f"  {site.name}: {posting.title!r} ({posting.job_id}) isn't remote: "
+                        f"{_describe_evidence(posting.remote_note)}.")
             if posting.job_id in descriptions or posting.job_id in to_fetch:
                 continue
             if _passes_listing_filters(posting, site, track, details_loaded=False):
@@ -854,7 +904,18 @@ def search_site(
     failed_details = 0
     for job_id, detailed, error in details:
         if error is None:
-            descriptions[job_id] = detailed
+            checked, why, overridden = check_work_arrangement(detailed)
+            descriptions[job_id] = checked
+            if why:
+                # Saved jobs are corrected from this (correct_saved_remote_flags).
+                onsite[job_id] = why
+            if overridden:
+                # What the search results said, before the details were read.
+                flag = {True: "marked remote", None: "not marked either way", False: "listed"}[
+                    to_fetch.get(job_id, detailed).is_remote
+                ]
+                log(f"  {site.name}: {detailed.title!r} ({job_id}) is {flag}, but "
+                    f"{_describe_evidence(why)}; treating it as not remote.")
         else:
             failed_details += 1
     if failed_details:
@@ -871,7 +932,9 @@ def search_site(
             existing = best.get(posting.job_id)
             if match and (existing is None or match.score > existing.score):
                 best[posting.job_id] = match
-    return SiteSearchResult(list(best.values()), len(searches), failed_terms)
+    return SiteSearchResult(
+        list(best.values()), len(searches), failed_terms, onsite, set(descriptions) | set(onsite)
+    )
 
 
 def search_term(
@@ -899,9 +962,16 @@ def _search_site_in_own_session(site: JobSite) -> SiteSearchResult:
 
 
 def run_all_searches(
-    site_selectors: list[str] | None = None, include_unmarked: bool = False
+    site_selectors: list[str] | None = None,
+    include_unmarked: bool = False,
+    onsite: dict[str, str] | None = None,
+    checked: set[str] | None = None,
 ) -> list[JobMatch]:
-    """Search every site (or those ``site_selectors`` pick) at the same time."""
+    """Search every site (or those ``site_selectors`` pick) at the same time.
+
+    ``onsite``, if given, is filled with the jobs whose posting says on-site or
+    hybrid although the site didn't mark them so (job ID -> why).
+    """
     with build_session() as session:
         sites = resolve_sites(
             session, selectors=site_selectors, include_unmarked=include_unmarked
@@ -918,6 +988,10 @@ def run_all_searches(
             result = future.result()
             total_searches += result.searches
             failed_searches.extend(f"{site.name}: {term}" for term in result.failed_terms)
+            if onsite is not None:
+                onsite.update(result.onsite)
+            if checked is not None:
+                checked.update(result.checked)
             for job in result.matches:
                 existing = all_matches.get(job.job_id)
                 if existing is None or job.score > existing.score:
@@ -1057,6 +1131,30 @@ class RunSummary:
     email_skipped_reason: str | None = None
 
 
+def correct_saved_remote_flags(store: FirestoreJobStore, found: dict[str, str]) -> int:
+    """Mark saved jobs not remote when their posting says on-site or hybrid.
+
+    ``found`` is what this run's search read in the descriptions of jobs it
+    saw again. Every saved job's title and location are checked too, so jobs
+    saved before this check existed are fixed even if they're no longer listed.
+    Returns how many jobs were changed.
+    """
+    fixes: dict[str, str] = {}
+    for doc_id, data in store.list_job_documents():
+        if data.get("is_remote") is False or data.get("work_arrangement"):
+            continue  # already not remote, or you've said how it's worked
+        location = ", ".join(str(data.get(key) or "") for key in ("city", "state") if data.get(key))
+        reason = found.get(doc_id) or onsite_evidence(str(data.get("title") or ""), "", location)
+        if reason:
+            # A phrase that reads after "Listed as remote, but ..." in the dashboard.
+            fixes[doc_id] = _describe_evidence(reason)
+    store.mark_not_remote(fixes)
+    if fixes:
+        print(f"Marked {len(fixes)} saved job(s) not remote because the posting says on-site "
+              "or hybrid (see each job's not_remote_reason).")
+    return len(fixes)
+
+
 def main(
     store: FirestoreJobStore | None = None,
     site_selectors: list[str] | None = None,
@@ -1071,7 +1169,9 @@ def main(
     print(f"Job state: {store.description}")
     seen_ids = store.load_seen_ids()
     unemailed_ids = store.load_unemailed_ids()
-    all_matches = run_all_searches(site_selectors, include_unmarked)
+    onsite: dict[str, str] = {}
+    checked: set[str] = set()
+    all_matches = run_all_searches(site_selectors, include_unmarked, onsite, checked)
 
     brand_new = [job for job in all_matches if job.job_id not in seen_ids]
     # Re-send anything a previous run saved but failed to email.
@@ -1089,6 +1189,9 @@ def main(
     # "unemailed" and flip to "emailed" below once the digest is accepted.
     store.save_matches(all_matches, new_ids={job.job_id for job in brand_new})
     print(f"Saved {len(all_matches)} match(es).")
+    correct_saved_remote_flags(store, onsite)
+    if RECHECK_SAVED_JOBS:
+        recheck_saved_jobs(store, skip=checked | set(onsite), selectors=site_selectors)
 
     message_id: str | None = None
     if to_email:
@@ -1179,11 +1282,211 @@ def build_parser() -> argparse.ArgumentParser:
         "on-site are still dropped.",
     )
     parser.add_argument(
+        "--check-remote",
+        action="append",
+        metavar="URL_OR_JOB_ID",
+        help="explain how the search reads one job's remote status: the site's own "
+        "fields, the verdict, and the description lines that decided it. Takes a "
+        "posting URL or a saved job ID (from the dashboard); repeat for several.",
+    )
+    parser.add_argument(
+        "--recheck-saved",
+        action="store_true",
+        help="without searching or emailing, re-check every saved job marked remote "
+        "against its posting, mark the on-site/hybrid ones not remote, and write "
+        "each job's verdict to remote_check_report.txt (with --site, only those sites)",
+    )
+    parser.add_argument(
         "--list-sites",
         action="store_true",
         help="show the configured sites and how each one is read, then exit",
     )
     return parser
+
+
+# Lines of a description worth showing when checking a job's remote status.
+ARRANGEMENT_WORDS = re.compile(
+    r"on[- ]?site|onsite|hybrid|in[- ]office|in the office|in[- ]person|remote|local to|"
+    r"days? (?:a|per) week|commut|relocat",
+    re.IGNORECASE,
+)
+
+
+def _site_for(target: str, session: requests.Session, store: FirestoreJobStore | None):
+    """Work out (site, url, native ID) for a job URL or a saved job ID."""
+    native_id = ""
+    url = target
+    if not re.match(r"https?://", target):
+        saved = (store or get_job_store(verbose=False)).get_job(target)
+        if saved is None:
+            raise SiteSelectionError(f"{target!r} is neither a job URL nor a saved job ID.")
+        url = str(saved.get("url") or "")
+        for site in resolve_sites(session):
+            if target.startswith(site.id_prefix):
+                return site, url, target[len(site.id_prefix):]
+        raise SiteSelectionError(f"No configured site makes job IDs like {target!r}.")
+    parsed = urlparse(url)
+    host, path = (parsed.hostname or "").lower(), parsed.path + "/"
+    for site in resolve_sites(session):
+        board = urlparse(str(getattr(site, "board_url", "") or ""))
+        token = str(getattr(site, "board_token", "") or "")
+        if site.kind == "insight-global" and host.endswith("insightglobal.com"):
+            return site, url, native_id
+        if board.hostname == host and f"{board.path}/" in path:  # a Workday board
+            return site, url, native_id
+        if token and host.endswith("greenhouse.io") and f"/{token}/" in path:
+            return site, url, native_id
+    # Not a configured site: resolve it on its own (any Workday/Greenhouse board).
+    return resolve_job_site(url, session, remote_only=REMOTE_ONLY, country=JOB_COUNTRY), url, native_id
+
+
+def _fill_from_search(site: JobSite, posting: Posting, saved: dict[str, Any] | None) -> Posting:
+    """Fill in what a lookup couldn't find (its title, the site's remote flag)
+    from the saved job."""
+    changes: dict[str, Any] = {}
+    if saved and saved.get("title") and posting.title.startswith("("):
+        changes["title"] = str(saved["title"])
+    if posting.is_remote is None:
+        if saved and isinstance(saved.get("is_remote"), bool):
+            changes["is_remote"] = saved["is_remote"]
+
+    return dataclasses.replace(posting, **changes) if changes else posting
+
+
+def _short_fields(payload: Any, prefix: str = "") -> list[str]:
+    """Every short, non-description field in a site's JSON, as "key: value"."""
+    lines = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            name = f"{prefix}{key}"
+            if isinstance(value, dict):
+                lines += _short_fields(value, f"{name}.")
+            elif isinstance(value, list) and all(isinstance(v, dict) for v in value) and value:
+                for index, item in enumerate(value[:5]):
+                    lines += _short_fields(item, f"{name}[{index}].")
+            elif value not in (None, "", []) and len(str(value)) <= 80:
+                lines.append(f"{name}: {value}")
+    return lines
+
+
+def explain_posting(site: JobSite, posting: Posting, payload: Any) -> tuple[Posting, list[str]]:
+    """The remote verdict for one job, and why, as printable lines."""
+    checked, why, _ = check_work_arrangement(posting)
+    lines = [f"{site.name}: {posting.title}", f"Posting: {posting.url}"]
+    flag = {True: "remote", False: "not remote", None: "not stated"}[posting.is_remote]
+    lines.append(f"Site's own data says: {flag}"
+                 + (f" ({posting.remote_note})" if posting.remote_note else ""))
+    if checked.is_remote is False:
+        reason = _describe_evidence(why or "")
+        lines.append(f"VERDICT: NOT REMOTE. {reason[:1].upper()}{reason[1:]}.")
+    elif checked.is_remote is None:
+        lines.append("VERDICT: remote status not stated (kept only with --include-unmarked).")
+    else:
+        lines.append("VERDICT: remote. No on-site or hybrid wording found.")
+    fields = [line for line in _short_fields(payload)
+              if not re.search(r"description|content|jobDescription", line.split(":")[0], re.I)]
+    lines.append("Fields in the site's data:" if fields else "No short fields in the site's data.")
+    lines += [f"  {line}" for line in fields[:60]]
+    mentions = [line for line in (checked.description or "").split("\n") if ARRANGEMENT_WORDS.search(line)]
+    lines.append("Description lines about where you'd work:" if mentions
+                 else "The description doesn't mention on-site, hybrid, office, or remote.")
+    lines += [f"  | {line[:200]}" for line in mentions[:15]]
+    return checked, lines
+
+
+def check_remote(targets: list[str], store: FirestoreJobStore | None = None) -> int:
+    """Explain how the search reads one job's remote status (--check-remote)."""
+    status = 0
+    with build_session() as session:
+        for target in targets:
+            print(f"\n=== {target}")
+            try:
+                site, url, native_id = _site_for(target, session, store)
+                saved = None
+                if not re.match(r"https?://", target):
+                    saved = (store or get_job_store(verbose=False)).get_job(target)
+                posting, payload = site.lookup(
+                    session, url, native_id, title=str((saved or {}).get("title") or "")
+                )
+                posting = _fill_from_search(site, posting, saved)
+            except (SiteSelectionError, UnsupportedSiteError, requests.RequestException) as error:
+                print(f"Couldn't check it: {type(error).__name__}: {error}")
+                status = 1
+                continue
+            for line in explain_posting(site, posting, payload)[1]:
+                print(line)
+    print("\nIf a job says on-site but the verdict is remote, send this output so the check "
+          "can learn its wording.")
+    return status
+
+
+def recheck_saved_jobs(
+    store: FirestoreJobStore,
+    skip: set[str] | None = None,
+    selectors: list[str] | None = None,
+    report: Path | None = None,
+) -> int:
+    """Re-check saved jobs marked remote that this run's search didn't check.
+
+    A job saved before the on-site checks existed (or before they learned a
+    wording) is only corrected when the search sees it again, and a search
+    doesn't see every saved job again: postings close, and each term only
+    reads its newest pages. So each such job's posting is loaded on its own
+    and checked; jobs that turn out on-site or hybrid are marked not remote.
+    With ``report``, every re-checked job's verdict and the lines behind it
+    are written there. Returns how many jobs were changed.
+    """
+    skip = skip or set()
+    with build_session() as session:
+        sites = resolve_sites(session, selectors=selectors)
+        targets = []
+        for doc_id, data in store.list_job_documents():
+            if data.get("is_remote") is False or doc_id in skip or not data.get("url"):
+                continue
+            if data.get("work_arrangement"):
+                continue  # you've said how it's worked
+            site = next((s for s in sites if doc_id.startswith(s.id_prefix)), None)
+            if site is not None:
+                targets.append((doc_id, data, site))
+        if not targets:
+            return 0
+        print(f"Re-checking {len(targets)} saved remote job(s) this search didn't check ...")
+
+        def load(doc_id: str, data: dict[str, Any], site: JobSite) -> Any:
+            try:
+                return site.lookup(
+                    session, str(data["url"]), doc_id[len(site.id_prefix):], title=str(data.get("title") or "")
+                )
+            except UnsupportedSiteError as error:
+                return error
+
+        results = _run_parallel(
+            [((doc_id, data, site), lambda d=doc_id, v=data, s=site: load(d, v, s))
+             for doc_id, data, site in targets],
+            MAX_CONCURRENT_REQUESTS_PER_SITE,
+        )
+    fixes: dict[str, str] = {}
+    unavailable = 0
+    sections: list[str] = []
+    for (doc_id, data, site), result, error in results:
+        if error is not None or isinstance(result, Exception) or result is None:
+            unavailable += 1
+            sections.append(f"=== {doc_id}\n{data.get('title')}: couldn't load the posting "
+                            f"(it may be closed): {error or result}")
+            continue
+        posting, payload = result
+        checked, lines = explain_posting(site, _fill_from_search(site, posting, data), payload)
+        if checked.is_remote is False:
+            fixes[doc_id] = _describe_evidence(checked.remote_note or "the site marks it hybrid or on-site")
+            print(f"  {site.name}: {data.get('title')!r} ({doc_id}) isn't remote: {fixes[doc_id]}.")
+        sections.append(f"=== {doc_id}\n" + "\n".join(lines))
+    store.mark_not_remote(fixes)
+    print(f"Re-checked {len(targets)} saved job(s): {len(fixes)} marked not remote"
+          + (f", {unavailable} couldn't be loaded (closed postings?)" if unavailable else "") + ".")
+    if report is not None:
+        report.write_text("\n\n".join(sections) + "\n")
+        print(f"Every re-checked job's verdict, fields, and description lines: {report}")
+    return len(fixes)
 
 
 def list_sites() -> None:
@@ -1200,6 +1503,17 @@ def cli(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.list_sites:
         list_sites()
+        return 0
+    if args.check_remote:
+        store = FirestoreJobStore.local() if args.local else None
+        return check_remote(args.check_remote, store)
+    if args.recheck_saved:
+        store = FirestoreJobStore.local() if args.local else get_job_store()
+        try:
+            recheck_saved_jobs(store, selectors=args.sites, report=REMOTE_CHECK_REPORT)
+        except SiteSelectionError as error:
+            print(f"job_search.py: error: {error}", file=sys.stderr)
+            return 2
         return 0
     store = FirestoreJobStore.local() if args.local else None
     try:

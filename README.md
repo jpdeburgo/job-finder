@@ -76,21 +76,43 @@ folder and applies it:
 ```bash
 python3 apply_update.py --dry-run     # which zip it picked and what would change
 python3 apply_update.py               # apply only what the zip changed (asks first)
-python3 apply_update.py --all         # make the project match the zip exactly
+python3 apply_update.py --all         # take every file from the zip, your edits included
 python3 apply_update.py --zip PATH    # use a specific zip (or unzipped folder)
 python3 apply_update.py --candidates  # every project zip found, newest first
 python3 apply_update.py --undo        # put back what the last update changed
 ```
 
-It picks the most recently downloaded zip (or folder, if your browser unzipped
-it) that contains this project, whatever it's called. To tell the update's
-changes from edits you made after sharing, it compares against the archive
-you shared, which `archive.py` left in the project root. Files only you
-changed are kept. Files you both changed are conflicts: yours are kept unless
-you pass `--force`. Secrets, `node_modules`, and `backend/local_firestore.json`
-are never touched. Everything it overwrites or deletes is backed up to
-`.update-backups/` first. If `package.json` or the `Pipfile` changed, it tells
-you to reinstall dependencies.
+It picks the most recently downloaded bundle (a zip, or a folder if your
+browser unzipped it) that holds this project's files, whatever it's called,
+and works out what kind it is:
+
+| In the download | What it does |
+| --- | --- |
+| `changes.diff` at the root (the chat's "changed files") | Applies just the diff: the files it adds, changes, renames, and deletes. Everything else stays as it is. If you've edited a file, the diff is applied to your version, so your edits are kept when they don't overlap the changes. |
+| The whole project, no diff (the chat's "all code", or an `archive.py` zip) | Replaces the entire project: every file is updated, and files it doesn't have are deleted, except ones you created and ones git ignores. |
+| Some files, no diff | Adds and updates those files; nothing is deleted. |
+
+To keep edits you made yourself, it compares each file with earlier copies of
+the project: archives in the project root, updates it applied before, and
+older bundles in Downloads. A file matching one of those copies hasn't been
+edited by you, so it's brought up to date. A file that has had the same
+version in every copy (like a notes file only you change) is certainly yours
+and is kept. Any other difference is *possibly* yours, or from an update
+that's no longer in Downloads, so it asks whether to take the zip's versions
+(`--force`: yes, `--keep-mine`: no; `--yes` alone keeps yours). `--all` takes
+the zip's version of everything in it.
+
+Secrets, `node_modules`, and `backend/local_firestore.json` are never
+touched. A bundle of all the code deletes only files it removed, never files
+you created, and an update that would delete more than 5 files stops unless
+you add `--allow-deletes`. Folders in Downloads that someone has worked in
+(with `.git`, `node_modules`, `__pycache__`, ...) are never taken for a
+download. Everything it overwrites or deletes is backed up to
+`.update-backups/` first, and every changed file is checked against the zip
+afterwards. It also removes files an older version of it put in the wrong
+place (a bundle's `files/` folder copied in as-is): it knows them from that
+update's own record, and leaves any you've edited since. If `package.json` or the `Pipfile` changed, it tells you to
+reinstall dependencies.
 
 ## Repository layout
 

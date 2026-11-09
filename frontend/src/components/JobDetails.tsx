@@ -17,17 +17,19 @@ import {
   gmailMessageUrl,
   insightGlobalSearchUrl,
 } from "@/lib/jobs";
-import type { Job, JobStatus } from "@/lib/types";
+import type { Job, JobStatus, WorkArrangement } from "@/lib/types";
 import { ExternalLink } from "./ExternalLink";
 import { FitBadge } from "./FitBadge";
 import { RemoteLabel } from "./RemoteLabel";
 import { StatusBadge } from "./StatusBadge";
+import { WorkArrangementSelect } from "./WorkArrangementSelect";
 
 interface Props {
   job: Job;
   busy: boolean;
   onStatusChange: (status: JobStatus) => void;
   onNotesSave: (notes: string) => Promise<void>;
+  onArrangementChange: (value: WorkArrangement | null) => void;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -52,7 +54,7 @@ function Timestamp({ value }: { value: string | null }) {
  * Contents of the details drawer: every field, all links, quick actions, and
  * a notes editor. Rendered inside a `Sheet` by `JobsDashboard`.
  */
-export function JobDetails({ job, busy, onStatusChange, onNotesSave }: Props) {
+export function JobDetails({ job, busy, onStatusChange, onNotesSave, onArrangementChange }: Props) {
   // JobsDashboard keys this component by the saved notes, so a server-side
   // change remounts it with fresh state instead of needing an effect.
   const [notes, setNotes] = useState(job.notes ?? "");
@@ -78,6 +80,16 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave }: Props) {
           <StatusBadge status={job.status} />
           <RemoteLabel job={job} badge />
         </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Work arrangement:</span>
+          <WorkArrangementSelect job={job} disabled={busy} onChange={onArrangementChange} />
+          <span className="text-muted-foreground">Not what the posting says? Set it here.</span>
+        </div>
+        {job.is_remote === false && !job.work_arrangement && job.not_remote_reason && (
+          <p className="text-muted-foreground text-xs" data-testid="not-remote-reason">
+            Listed as remote, but {job.not_remote_reason}.
+          </p>
+        )}
         <SheetTitle className="text-lg leading-snug">
           {job.url ? (
             <ExternalLink href={job.url} className="text-foreground">

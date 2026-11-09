@@ -24,10 +24,17 @@ In the tracker you can:
   salary, posted date, and when the script last saw it. Search, filter by
   status/company/remote/track, and sort (**Best fit** puts the jobs that suit
   you best first; the details drawer explains each score, see
-  [Fit score](../backend/README.md#fit-score)). Like Company and Track, the Remote
+  [Fit score](../backend/README.md#fit-score)). Results come 25 to a page
+  (or 50 or 100: **Rows per page** under the table). A new filter, sort, or
+  page size starts again at page 1, and the page is kept in the address
+  (`/jobs?page=2&per_page=50`), so a reload or a bookmark opens the same page. Like Company and Track, the Remote
   filter only offers what your jobs have: "Remote", plus "Remote not stated"
   for jobs saved by `job_search.py --include-unmarked`, plus "Not remote" only
   if remote-only was turned off for a site.
+- Mark a job **On-site**, **Hybrid**, or **Remote** when the site gets it
+  wrong (the **Work arrangement** menu in the details drawer). Your choice
+  overrides the site's everywhere, including the Remote filter, and searches
+  never undo it; "As the site says" goes back.
 - Change a job's **status** inline (`unemailed` → `emailed` → `applied`,
   `skipped`, `interviewing`, `rejected`, `offer`) or use the **Mark applied**
   button; applied jobs show the date you applied.

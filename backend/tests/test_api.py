@@ -352,6 +352,7 @@ def test_list_jobs_returns_every_job_newest_first(jobs_client):
     assert react["fit_score"] == 81
     assert react["fit_breakdown"] == {"skills": 51, "role": 30}
     assert react["fit_reasons"] == ["Skills: React"]
+    assert react["not_remote_reason"] is None
     java = body["jobs"][1]
     assert (java["fit_score"], java["fit_breakdown"], java["fit_reasons"]) == (None, {}, [])
 
@@ -454,11 +455,23 @@ def test_patch_job_notes_only_and_clearing(jobs_client):
     assert cleared["status"] == "applied"  # untouched
 
 
+def test_patch_job_work_arrangement(jobs_client, job_store):
+    marked = jobs_client.patch("/jobs/ig-react", json={"work_arrangement": "on_site"}).json()["job"]
+    assert (marked["work_arrangement"], marked["is_remote"], marked["site_is_remote"]) == ("on_site", False, True)
+    assert marked["work_arrangement_set_at"] is not None
+    assert "ig-react" not in job_ids(jobs_client.get("/jobs", params={"remote": "remote"}))  # out of "Remote only"
+    assert job_store.get_job("ig-react")["is_remote"] is True  # the site's value is kept
+
+    cleared = jobs_client.patch("/jobs/ig-react", json={"work_arrangement": None}).json()["job"]
+    assert (cleared["work_arrangement"], cleared["is_remote"]) == (None, True)
+    assert jobs_client.patch("/jobs/ig-react", json={"work_arrangement": "moon"}).status_code == 422
+
+
 @pytest.mark.parametrize(
     "body, message",
     [
-        ({}, "Nothing to update: provide status and/or notes"),
-        ({"status": None}, "Nothing to update: provide status and/or notes"),
+        ({}, "Nothing to update: provide status, notes, and/or work_arrangement"),
+        ({"status": None}, "Nothing to update: provide status, notes, and/or work_arrangement"),
         ({"status": "bogus"}, "Invalid request: status:"),
         ({"notes": "x" * 5001}, "Invalid request: notes:"),
         ({"title": "hacked"}, "Invalid request: title: Extra inputs are not permitted"),

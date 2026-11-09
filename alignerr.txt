@@ -11,5 +11,3 @@ You can judge this is complete by checking in backend/local_firestore.json and s
 
 Next Prompts:
 1. Add pagination to the UI too. 
-2. I should be able to filter and sort the results based on compatibility in the UI
-3. Add an api endpoint that only grabs the most compatible jobs. Or make it so it only gets jobs that pass a compatibility score

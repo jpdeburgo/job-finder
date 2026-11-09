@@ -32,7 +32,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
@@ -91,6 +91,9 @@ class Posting:
     description: str | None = None
     # Site-specific handle for ``fetch_details`` (e.g. a Workday job path).
     detail_key: str = ""
+    # Why the site's data says the job isn't remote, when a field other than
+    # its main remote flag says so (e.g. 'workType = "Onsite"').
+    remote_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -113,10 +116,24 @@ def log(message: str) -> None:
         sys.stdout.flush()
 
 
-def html_to_text(value: Any) -> str:
-    """Flatten an HTML job description to plain text."""
-    text = HTML_TAG_PATTERN.sub(" ", str(value or ""))
-    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+BLOCK_TAG_PATTERN = re.compile(
+    r"<\s*(?:br|/p|/li|li|/div|/h[1-6]|/tr|/ul|/ol|p|div|h[1-6]|tr|ul|ol)\b[^>]*>", re.IGNORECASE
+)
+
+
+def html_to_text(value: Any, keep_lines: bool = False) -> str:
+    """Flatten an HTML job description to plain text.
+
+    With ``keep_lines``, paragraphs, list items, and line breaks stay on
+    their own lines, so a line that just says "Onsite" or "Hybrid - Plano, TX"
+    can be told apart from "onsite" in the middle of a sentence.
+    """
+    source = str(value or "")
+    if not keep_lines:
+        return re.sub(r"\s+", " ", html.unescape(HTML_TAG_PATTERN.sub(" ", source))).strip()
+    text = html.unescape(HTML_TAG_PATTERN.sub(" ", BLOCK_TAG_PATTERN.sub("\n", source)))
+    lines = (re.sub(r"[^\S\n]+", " ", line).strip() for line in text.split("\n"))
+    return "\n".join(line for line in lines if line)
 
 
 def contains_phrase(text: str, phrase: str) -> bool:
@@ -147,6 +164,326 @@ def remote_from_text(text: Any) -> bool | None:
     if any(contains_phrase(value, word) for word in NOT_REMOTE_WORDS):
         return False
     return True if contains_phrase(value, "remote") else None
+
+
+# --- Postings that say they're on-site or hybrid -----------------------------------
+#
+# Sites' remote flags are often wrong: Insight Global marks jobs "remote" whose
+# posting says "Onsite in Dallas", and a Greenhouse location of "Remote - US"
+# can sit above "This role is hybrid, 3 days a week in our NYC office". So the
+# title, location, and description are read for an explicit statement. Only
+# clear ones count: benefits ("on-site gym"), occasional visits ("travel
+# onsite quarterly"), choices ("remote or hybrid"), and tech ("Hybrid Cloud")
+# don't.
+
+_ONSITE = r"(?:on[- ]?site|onsite|in[- ]office|in[- ]person)"
+_ONSITE_OR_HYBRID = rf"(?:{_ONSITE}|hybrid)"
+_OFFICE_PLACE = (
+    r"(?:in the office|into the office|in office|"
+    r"(?:to|into|at|in)\s+(?:the|our|an?)\s+(?:\w+\s+)?"
+    r"(?:office|offices|headquarters|hq|facility|campus|site|location))"
+)
+_WEEKLY = r"(?:\s*(?:a|per|each|every|/|x)\s*(?:week|wk))?"
+_NOT_MONTHLY = r"(?!\s*(?:a|per|each|every|/)\s*(?:month|quarter|year))"
+# Words after "onsite" that make it describe something else ("onsite teams").
+# A label answered in the negative: "Onsite: No", "Hybrid - N/A".
+_NOT_NEGATED = r"(?!\s*(?:no|none|n/?a|not|never|optional)\b)"
+_NOT_ABOUT_YOU = (
+    r"(?!\s+(?:teams?|staff|colleagues|employees|personnel|support|customers?|clients?|"
+    r"partners?|engineers?|technicians?|resources?|counterparts|stakeholders|users|events?|"
+    r"meetings?|visits?|interviews?|training|gym|cafeteria|amenities|parking|childcare|"
+    r"health|clinic|services?|equipment|hardware|installations?|deployments?)\b)"
+)
+ONSITE_DESCRIPTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        # "100% onsite", "fully in-office"
+        rf"\b(?:100\s*%|fully|entirely|completely|strictly)\s+{_ONSITE}\b{_NOT_ABOUT_YOU}",
+        # "Onsite in Atlanta", "hybrid at our Dallas office", "in-office in NYC"
+        rf"\b{_ONSITE_OR_HYBRID}\s+(?:in|at)\s+(?:our\s+|the\s+)?(?-i:[A-Z])",
+        # "Onsite - Plano, TX", "ONSITE: Dallas" (but not "Onsite - Remote")
+        rf"\b{_ONSITE}\s*[-–:]{_NOT_NEGATED}\s*(?!remote)(?-i:[A-Z])",
+        # "(Hybrid)", "(onsite 3 days)", "(100% Onsite)"
+        rf"\(\s*(?:100\s*%\s*|fully\s+)?{_ONSITE_OR_HYBRID}\b(?![^)]*(?:remote|\bno\b|\bnot\b|optional))"
+        r"[^)]{0,40}\)",
+        # "must be onsite", "will sit onsite in Plano", "must be local to Atlanta and onsite",
+        # "expected to report to our Austin office" (but not "work with onsite teams")
+        r"\b(?:must|will|would|shall|required to|expected to|needs? to|have to|has to|"
+        r"will need to|will be required to|will be expected to|requires you to)\s+"
+        r"(?:\w+ly\s+)?(?:be able to\s+)?(?:be|sit|work|report|come|commute|go)\s+"
+        rf"(?:[\w,]+\s+){{0,4}}?(?:{_ONSITE}|on site|{_OFFICE_PLACE})\b{_NOT_ABOUT_YOU}",
+        # "onsite 3x a week"
+        rf"\b{_ONSITE}\s*[(:\-–]?\s*\d\s*x{_WEEKLY}{_NOT_MONTHLY}",
+        # "Schedule: Onsite", "Work environment - Hybrid", "Remote status: Onsite"
+        r"\b(?:schedule|setting|environment|arrangement|remote status|work status)\s*[:\-–]\s*"
+        rf"(?:100%\s+|fully\s+)?{_ONSITE_OR_HYBRID}\b",
+        # "This role is onsite", "The position will be 100% in-office", "Position is hybrid"
+        r"(?:\b(?:this|the)\s+|^|(?<=[.:;!\n]\s))(?:role|position|job|opportunity|contract|assignment|engagement)\s+"
+        r"(?:is|will be|is going to be)\s+(?:an?\s+)?(?:100%\s+|fully\s+|primarily\s+|strictly\s+)?"
+        rf"{_ONSITE_OR_HYBRID}\b",
+        # "a hybrid position", "onsite role", "requires onsite presence", "hybrid schedule"
+        rf"\b{_ONSITE_OR_HYBRID}\s+(?:role|position|job|opportunity|contract|assignment|"
+        r"schedule|requirement|presence|work\s+(?:model|schedule|arrangement|environment))\b",
+        # "must be onsite", "required to work in the office", "expected to report to our Austin office"
+        r"\b(?:must|required to|requirement to|expected to|needs? to|will need to|"
+        r"will be required to|will be expected to|requires you to)\s+(?:\w+\s+){0,4}?"
+        rf"(?:{_ONSITE}|on site|{_OFFICE_PLACE})\b",
+        # "3 days onsite", "2-3 days a week in office", "4x/week in the office"
+        rf"\b\d\s*(?:(?:-|to|or)\s*\d\s*)?(?:days?|x){_WEEKLY}\s*(?:{_ONSITE}|on site|{_OFFICE_PLACE})\b",
+        # "onsite 3 days a week", "in office: 2 days" (but not "onsite 2 days a month")
+        rf"\b(?:{_ONSITE}|in the office|in office)\s*[(:\-–]?\s*\d\s*(?:(?:-|to|or)\s*\d\s*)?"
+        rf"days?{_WEEKLY}\b{_NOT_MONTHLY}",
+        # "Work arrangement: Hybrid", "Location type - Onsite", "Location: On-site (Dallas)"
+        r"\b(?:work(?:place)?|location|job|employment|position)\s*"
+        r"(?:type|model|arrangement|setting|style|location)?\s*[:\-–]\s*(?:100%\s+|fully\s+)?"
+        rf"{_ONSITE_OR_HYBRID}\b",
+    )
+)
+# Statements that the job is not remote; read as-is, with no softening.
+NOT_REMOTE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bnot\s+(?:an?\s+)?(?:fully\s+|100%\s+)?remote\b(?!\s*-?\s*first)",
+        r"\bno\s+remote\s+(?:work|option|options|opportunity|candidates|applicants)\b",
+        r"\bnon[- ]remote\b",
+        r"\bremote\s+(?:work\s+)?(?:is\s+)?not\s+(?:available|an option|possible|offered|permitted|allowed|supported)\b",
+        r"\bnot\s+(?:eligible|open|available)\s+(?:for|to)\s+(?:fully\s+)?remote\b",
+        r"\bremote\s+(?:candidates|applicants|workers)\s+(?:will\s+not|won't|cannot|can't)\s+be\s+considered\b",
+        # "Remote: No" (a label, so a colon; "remote - no onsite" is the opposite)
+        r"\bremote\s*(?:work|option|eligible|eligibility|possible|available|allowed|opportunity)?\s*\??\s*:\s*no\b",
+        # "No remote." / "NO REMOTE!" on its own
+        r"\bno\s+remote\b(?=\s*(?:[.!,;)]|$))",
+    )
+)
+# A line that is nothing but a work-arrangement label: "Onsite",
+# "ONSITE - Plano, TX", "Hybrid (3 days in office)", "100% Onsite in Atlanta".
+# A short line ending in one: "Location: Dallas, TX - Onsite", "Plano, TX | Hybrid".
+ONSITE_LINE_END = re.compile(
+    rf"[-–|/:]\s*(?:100\s*%\s*|fully\s+)?{_ONSITE_OR_HYBRID}\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+# ...when the line is a location or a label, not a list of skills.
+_LOCATION_LIKE = re.compile(
+    r"(?i:\b(?:location|work|site|setting|schedule|type|arrangement)\b)|,\s*[A-Z]{2}\b"
+)
+ONSITE_LABEL_LINE = re.compile(
+    rf"^[\W_]*(?:work\s*(?:type|model|arrangement|location|setting)\s*[:\-–]\s*)?"
+    rf"(?:100\s*%\s*|fully\s+)?{_ONSITE_OR_HYBRID}\s*"
+    rf"(?:$|[-–:(,|/]{_NOT_NEGATED}\s*(?!remote)|\s+(?:in|at)\s+(?-i:[A-Z])|\s+\d)",
+    re.IGNORECASE,
+)
+# Words near a match that make it something other than a requirement.
+_SOFTENING_BEFORE = re.compile(
+    r"\b(?:no|not|never|without|occasional(?:ly)?|periodic(?:ally)?|sometimes|rare(?:ly)?|"
+    r"optional(?:ly)?|may|might|could|limited|minimal|infrequent(?:ly)?|if needed|as needed|"
+    r"when needed|if required|as required|quarterly|monthly|annual(?:ly)?|once a|travel|"
+    r"visits?|interviews?|onboarding|training|orientation|meetings?|events?|offsites?|"
+    r"first (?:day|week)|remote\s*(?:or|/|and/or))\b",
+    re.IGNORECASE,
+)
+_SOFTENING_AFTER = re.compile(
+    r"^\W{0,3}(?:[^.;!?]{0,40}?\b(?:optional|as needed|if needed|when needed|occasionally|"
+    r"for (?:onboarding|training|orientation|meetings|interviews|events)|"
+    r"(?:once|twice|\d+\s*(?:times|days?|x))\s*(?:a|per|each|every|/)\s*(?:month|quarter|year))\b|"
+    r"\s*(?:or|/|and/or)\s*(?:fully\s+|100%\s+)?remote\b)",
+    re.IGNORECASE,
+)
+# "Hybrid" followed by one of these is tech, not a work arrangement.
+HYBRID_TECH_WORDS = {
+    "cloud", "clouds", "multicloud", "multi-cloud", "app", "apps", "mobile", "application",
+    "applications", "it", "infrastructure", "integration", "integrations", "environment",
+    "environments", "network", "networks", "networking", "system", "systems", "model", "models",
+    "architecture", "architectures", "solution", "solutions", "search", "storage", "data",
+    "database", "databases", "framework", "frameworks", "approach", "methodology", "agile",
+    "development", "ai", "ml", "deployment", "deployments",
+}
+_TITLE_ONSITE = re.compile(rf"(?<![A-Za-z]){_ONSITE}(?![A-Za-z])", re.IGNORECASE)
+_HYBRID_WORD = re.compile(r"(?<![A-Za-z])hybrid(?![A-Za-z])(?:[\s/-]+([A-Za-z-]+))?", re.IGNORECASE)
+
+
+def _hybrid_means_tech(text: str) -> bool:
+    """True when every "hybrid" in ``text`` is followed by a tech word ("Hybrid Cloud")."""
+    words = [(match.group(1) or "").lower() for match in _HYBRID_WORD.finditer(text)]
+    return bool(words) and all(word in HYBRID_TECH_WORDS for word in words)
+
+
+def _sentence_around(text: str, start: int, end: int) -> tuple[str, str]:
+    """Up to 60 characters before and after a match, cut at sentence ends."""
+    before = re.split(r"[.!?;\n•]", text[max(0, start - 60):start])[-1]
+    after = re.split(r"[.!?;\n•]", text[end:end + 60])[0]
+    return before, after
+
+
+def _snippet(text: str, start: int, end: int) -> str:
+    before, after = _sentence_around(text, start, end)
+    return re.sub(r"\s+", " ", f"{before[-25:]}{text[start:end]}{after[:25]}").strip()
+
+
+def onsite_evidence(title: str, description: str | None = "", location: str = "") -> str | None:
+    """Return why a posting reads as on-site or hybrid, or None if it doesn't say so.
+
+    The result is a short quote for logs and the job's ``not_remote_reason``,
+    e.g. 'title says "On-Site"' or 'description: "must be onsite in Dallas"'.
+    """
+    title = str(title or "")
+    # A title naming both ("Remote/Onsite", "Remote or Hybrid") is a choice.
+    if not contains_phrase(title, "remote"):
+        onsite = _TITLE_ONSITE.search(title)
+        if onsite:
+            return f'title says "{onsite.group(0)}"'
+        if _HYBRID_WORD.search(title) and not _hybrid_means_tech(title):
+            return 'title says "Hybrid"'
+    if remote_from_text(location) is False and not _hybrid_means_tech(location):
+        return f'location says "{location.strip()}"'
+
+    text = str(description or "")
+    for line in text.split("\n"):
+        if (
+            len(line) <= 80
+            and (
+                ONSITE_LABEL_LINE.search(line)
+                or (ONSITE_LINE_END.search(line) and _LOCATION_LIKE.search(line))
+            )
+            and not contains_phrase(line, "remote")
+            and not _hybrid_means_tech(line)
+            and not _SOFTENING_BEFORE.search(line)
+        ):
+            return f'description: "{line.strip()}"'
+    for pattern in NOT_REMOTE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return f'description: "{_snippet(text, match.start(), match.end())}"'
+    for pattern in ONSITE_DESCRIPTION_PATTERNS:
+        for match in pattern.finditer(text):
+            matched = match.group(0)
+            before, after = _sentence_around(text, match.start(), match.end())
+            if "hybrid" in matched.lower():
+                following = text[match.start():match.end() + 30]
+                if _hybrid_means_tech(following):
+                    continue
+            if _SOFTENING_BEFORE.search(f"{before} {matched}") or _SOFTENING_AFTER.search(after):
+                continue
+            # "work in person with stakeholders" is about meeting people, not where you work.
+            if re.search(r"in[- ]person$", matched, re.IGNORECASE) and re.match(r"\s+with\b", after):
+                continue
+            return f'description: "{_snippet(text, match.start(), match.end())}"'
+    return None
+
+
+# Field names that carry a work arrangement in a site's JSON: Insight Global's
+# workRemote, "workType", "isHybrid", "locationType", "workplaceType", ...
+WORKPLACE_FIELD = re.compile(
+    r"remote|on_?site|hybrid|in_?office|in_?person|telecommut|telework|wfh|workplace|"
+    r"work_?(?:type|setting|arrangement|model|location|style|mode|environment|schedule)|"
+    r"location\W*_?type|job_?setting",
+    re.IGNORECASE,
+)
+
+
+# A value that is nothing but a work arrangement, under any field name: a
+# badge or tag like "Onsite", "HYBRID", "100% On-Site", "Remote".
+ARRANGEMENT_VALUE = re.compile(
+    r"^\s*(?:100\s*%\s*|fully\s+|only\s+)?"
+    r"(on[- ]?site|onsite|hybrid|in[- ]office|in[- ]person|office[- ]based|"
+    r"remote|telecommute|work from home|wfh)(?:\s+only)?\s*$",
+    re.IGNORECASE,
+)
+IDENTIFIER_FIELD = re.compile(r"(?:^|_)id$|Id$|ID$|url$|Url$|URL$|link$|slug$|path$|Path$|title$|Title$", re.ASCII)
+_REMOTE_WORDS = ("remote", "telecommut", "telework", "wfh", "work from home", "workfromhome")
+_ONSITE_KEY_WORDS = ("hybrid", "onsite", "on_site", "inoffice", "in_office", "inperson")
+
+
+def flag_value(value: Any) -> bool | None:
+    """A yes/no flag as sites send it: True, "true", "Yes", "Y", 1 (None if it isn't one)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("yes", "true", "y", "1"):
+            return True
+        if lowered in ("no", "false", "n", "0"):
+            return False
+    return None
+
+
+def structured_remote(payload: Any, skip: Iterable[str] = ()) -> tuple[bool | None, str]:
+    """Read remote status from a site's JSON, outside its descriptions.
+
+    Looks at fields named for the work arrangement (workType, isHybrid,
+    remoteWork, workLocation.type, ...) and at any field whose whole value is
+    one ("Onsite", ["Contract", "Hybrid"]). Returns ``(status, why)``: False
+    with the field when any says on-site or hybrid (that wins), else True when
+    one says remote, else ``(None, "")``. Long text is left to ``onsite_evidence``.
+    """
+    skipped = {name.lower() for name in skip}
+    found_remote = ""
+
+    def judge(path: str, name: str, item: Any) -> bool | None:
+        lowered = name.lower()
+        named = bool(WORKPLACE_FIELD.search(path))
+        flag = flag_value(item)
+        # A yes/no value only means something in a field named for it
+        # ("isHybrid": true, "remoteWork": "No"); elsewhere true/1 is just data.
+        if flag is not None and (named or not isinstance(item, str)):
+            if not named:
+                return None
+            if any(word in lowered for word in _ONSITE_KEY_WORDS):
+                return False if flag else None
+            if any(word in lowered for word in _REMOTE_WORDS):
+                return flag
+            return None
+        texts = [t for t in (item if isinstance(item, list) else [item]) if isinstance(t, (str, int, float))]
+        text = " ".join(str(t) for t in texts)
+        if not text or len(text) > 60:
+            return None
+        if not named:
+            # Any field: only a value that is an arrangement and nothing else,
+            # and not an identifier or a title (titles are read on their own).
+            if IDENTIFIER_FIELD.search(name):
+                return None
+            words = [ARRANGEMENT_VALUE.match(str(t)) for t in texts]
+            found = [m.group(1).lower() for m in words if m]
+            if not found:
+                return None
+            return True if any(w.startswith(_REMOTE_WORDS) for w in found) else False
+        if re.search(r"\b(?:non|not|no)[- ]?remote\b", text, re.IGNORECASE):
+            return False  # "Non-Remote", "Not remote"
+        if contains_phrase(text, "remote"):
+            return True  # "Remote", or a choice like ["Remote", "Hybrid"]
+        return remote_from_text(text)
+
+    def visit(value: Any, depth: int, parent: str) -> str | None:
+        nonlocal found_remote
+        if depth > 4:
+            return None
+        items = value.items() if isinstance(value, dict) else enumerate(value) if isinstance(value, list) else ()
+        for key, item in items:
+            name = str(key)
+            if name.lower() in skipped:
+                continue
+            path = f"{parent}.{name}" if parent else name
+            if isinstance(item, dict) or (isinstance(item, list) and any(isinstance(i, dict) for i in item)):
+                deeper = visit(item, depth + 1, path if isinstance(value, dict) else parent)
+                if deeper:
+                    return deeper
+                continue
+            label = path if isinstance(value, dict) else parent
+            verdict = judge(label, name if isinstance(value, dict) else parent.rsplit(".", 1)[-1], item)
+            shown = item if not isinstance(item, str) else f'"{item}"'
+            if isinstance(item, bool):
+                shown = str(item).lower()
+            if verdict is False:
+                return f"{label} = {shown}"
+            if verdict is True:
+                found_remote = found_remote or f"{label} = {shown}"
+        return None
+
+    onsite = visit(payload, 0, "")
+    if onsite:
+        return False, onsite
+    return (True, found_remote) if found_remote else (None, "")
 
 
 def _slug(name: str) -> str:
@@ -191,6 +528,17 @@ class JobSite:
     def fetch_details(self, session: requests.Session, posting: Posting) -> Posting:
         """Return the posting with its description (and any extra fields) filled in."""
         return posting
+
+    def lookup(
+        self, session: requests.Session, url: str, native_id: str = "", title: str = ""
+    ) -> tuple[Posting, dict[str, Any]]:
+        """Load one job by its posting URL (or the site's own ID), with details.
+
+        ``title``, if known, helps sites whose details leave out fields that
+        only their search results have (Insight Global). Returns the posting
+        and the raw JSON behind it, for ``--check-remote`` and re-checks.
+        """
+        raise UnsupportedSiteError(f"Can't look up single {self.kind or self.name} jobs yet.")
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.name!r}, {self.search_url!r})"
@@ -270,6 +618,15 @@ class InsightGlobalSite(JobSite):
             return None
         address = record.get("workAddress") or {}
         pay = record.get("payRate") or {}
+        # workRemote is the search's flag, but any other work-arrangement
+        # field saying on-site or hybrid wins.
+        flag = record.get("workRemote")
+        is_remote = flag_value(flag)
+        if is_remote is None and isinstance(flag, str):
+            is_remote = remote_from_text(flag)  # "Remote", "Onsite", ...
+        status, why = structured_remote(record, skip=("workRemote",))
+        if status is False:
+            is_remote = False
         return Posting(
             job_id=f"{self.id_prefix}{requisition_id}",
             title=str(record.get("jobTitle") or "").strip() or "Unknown title",
@@ -277,7 +634,8 @@ class InsightGlobalSite(JobSite):
             company=self.name,
             city=str(address.get("locality") or ""),
             state=str(address.get("administrativeArea") or ""),
-            is_remote=bool(record.get("workRemote")),
+            is_remote=is_remote,
+            remote_note=why if status is False else "",
             job_type=_format_job_type(record.get("jobType")),
             salary_low=float(pay.get("min") or 0),
             salary_high=float(pay.get("max") or 0),
@@ -285,13 +643,76 @@ class InsightGlobalSite(JobSite):
             detail_key=requisition_id,
         )
 
-    def fetch_details(self, session: requests.Session, posting: Posting) -> Posting:
+    def details_payload(self, session: requests.Session, requisition_id: str) -> dict[str, Any]:
         response = session.get(
-            f"{self.api_url}/{posting.detail_key}/details", timeout=REQUEST_TIMEOUT_SECONDS
+            f"{self.api_url}/{requisition_id}/details", timeout=REQUEST_TIMEOUT_SECONDS
         )
         response.raise_for_status()
-        description = html_to_text(response.json().get("description"))
+        return response.json()
+
+    def apply_details(self, posting: Posting, payload: dict[str, Any]) -> Posting:
+        description = html_to_text(payload.get("description"), keep_lines=True)
+        # The details can carry work-arrangement fields the search didn't.
+        status, why = structured_remote(payload, skip=("description",))
+        if status is False:
+            return dataclasses.replace(
+                posting, description=description, is_remote=False, remote_note=why
+            )
+        if posting.is_remote is None and status is True:
+            return dataclasses.replace(posting, description=description, is_remote=True)
         return dataclasses.replace(posting, description=description)
+
+    def fetch_details(self, session: requests.Session, posting: Posting) -> Posting:
+        return self.apply_details(posting, self.details_payload(session, posting.detail_key))
+
+    def find_search_record(
+        self, session: requests.Session, requisition_id: str, title: str
+    ) -> dict[str, Any] | None:
+        """The job's own entry in the search results, found by its title.
+
+        That's where workRemote and the other arrangement fields are (the
+        details leave them out). Searched without the remote and job-type
+        filters, so an on-site job is found too.
+        """
+        if not title:
+            return None
+        for page in (1, 2, 3):
+            params = self.build_search_params(title, page)
+            params["filter.includeOnlyRemoteWork"] = "false"
+            params.pop("filter.jobType", None)
+            response = session.get(self.api_url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            payload = response.json()
+            for record in payload.get("jobs") or []:
+                if record.get("requisitionId") == requisition_id:
+                    return record
+            if page >= ((payload.get("pageMetadata") or {}).get("totalPages") or 1):
+                break
+        return None
+
+    def lookup(
+        self, session: requests.Session, url: str, native_id: str = "", title: str = ""
+    ) -> tuple[Posting, dict[str, Any]]:
+        requisition_id = native_id or urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+        details = self.details_payload(session, requisition_id)
+        title = title or str(details.get("jobTitle") or details.get("title") or "").strip()
+        try:
+            record = self.find_search_record(session, requisition_id, title)
+        except requests.RequestException:
+            record = None
+        posting = self._posting(record) if record else None
+        if posting is None:
+            posting = Posting(
+                job_id=f"{self.id_prefix}{requisition_id}",
+                title=title or "(title not in the details)",
+                url=self.build_job_url(requisition_id),
+                company=self.name,
+                # Without its search entry, the site's remote flag is unknown.
+                is_remote=None,
+                detail_key=requisition_id,
+            )
+        payload = {"search result": record or "(not found in Insight Global's search)", "details": details}
+        return self.apply_details(posting, details), payload
 
 
 # --- Workday ----------------------------------------------------------------------
@@ -479,18 +900,55 @@ class WorkdaySite(JobSite):
             detail_key=external_path,
         )
 
-    def fetch_details(self, session: requests.Session, posting: Posting) -> Posting:
+    def details_payload(self, session: requests.Session, external_path: str) -> dict[str, Any]:
         response = session.get(
-            f"{self.api_url}{posting.detail_key}",
+            f"{self.api_url}{external_path}",
             headers={"Accept": "application/json"},
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        info = response.json().get("jobPostingInfo") or {}
+        return response.json()
+
+    def lookup(
+        self, session: requests.Session, url: str, native_id: str = "", title: str = ""
+    ) -> tuple[Posting, dict[str, Any]]:
+        # .../<site>/job/Austin/Software-Engineer_R123 (maybe with /en-US/ first)
+        site_segment = "/" + self.board_url.rsplit("/", 1)[-1]
+        path = urlparse(url).path
+        if site_segment not in path:
+            raise UnsupportedSiteError(f"{url} isn't a job on {self.board_url}")
+        external_path = path.split(site_segment, 1)[1]
+        payload = self.details_payload(session, external_path)
+        info = payload.get("jobPostingInfo") or {}
+        requisition = external_path.rstrip("/").rsplit("/", 1)[-1].rsplit("_", 1)[-1]
+        posting = Posting(
+            job_id=f"{self.id_prefix}{requisition}",
+            title=str(info.get("title") or "").strip() or "Unknown title",
+            url=url,
+            company=self.name,
+            detail_key=external_path,
+        )
+        return self.apply_details(posting, payload), payload
+
+    def fetch_details(self, session: requests.Session, posting: Posting) -> Posting:
+        return self.apply_details(posting, self.details_payload(session, posting.detail_key))
+
+    def apply_details(self, posting: Posting, payload: dict[str, Any]) -> Posting:
+        info = payload.get("jobPostingInfo") or {}
         location = str(info.get("location") or "")
-        remote = posting.is_remote
+        # The details page's remoteType is the board's own answer, so it wins
+        # over a guess from the search results' location text ("Remote"): a
+        # job listed at "Remote" can still be remoteType "Hybrid".
+        remote = classify_remote_type(info.get("remoteType"))
+        note = posting.remote_note
+        if remote is False:
+            note = f'remoteType = "{info.get("remoteType")}"'
+        else:
+            status, why = structured_remote(info, skip=("jobDescription", "remoteType"))
+            if status is False:
+                remote, note = False, why
         if remote is None:
-            remote = classify_remote_type(info.get("remoteType"))
+            remote = posting.is_remote
         if remote is None and _mentions_remote(location, *(info.get("additionalLocations") or [])):
             remote = True
         # Some boards (Accenture's) leave the location out of search results,
@@ -502,8 +960,9 @@ class WorkdaySite(JobSite):
         )
         return dataclasses.replace(
             posting,
-            description=html_to_text(info.get("jobDescription")),
+            description=html_to_text(info.get("jobDescription"), keep_lines=True),
             is_remote=remote,
+            remote_note=note if remote is False else "",
             city=city,
             state=state,
             job_type=str(info.get("timeType") or posting.job_type),
@@ -554,6 +1013,40 @@ class WholeBoardSite(JobSite):
         return response.json()
 
 
+# Greenhouse custom fields that some companies use for the work arrangement,
+# e.g. {"name": "Workplace Type", "value": "Hybrid"}.
+GREENHOUSE_WORKPLACE_FIELD = re.compile(
+    r"workplace|work\s*(?:type|model|arrangement|location|setting|style)|location\s*type|remote",
+    re.IGNORECASE,
+)
+
+
+def greenhouse_workplace(metadata: Any) -> bool | None:
+    """Remote status from a Greenhouse job's custom fields, or None if none say."""
+    return greenhouse_workplace_field(metadata)[0]
+
+
+def greenhouse_workplace_field(metadata: Any) -> tuple[bool | None, str]:
+    """``(status, 'Workplace Type = "Hybrid"')`` from a Greenhouse job's custom fields."""
+    for item in metadata if isinstance(metadata, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        if not GREENHOUSE_WORKPLACE_FIELD.search(name):
+            continue
+        value = item.get("value")
+        text = " ".join(map(str, value)) if isinstance(value, list) else str(value or "")
+        field = f'{name} = "{text}"'
+        if "remote" in name.lower() and text.strip().lower() in ("yes", "true"):
+            return True, field
+        if "remote" in name.lower() and text.strip().lower() in ("no", "false"):
+            return False, field
+        found = remote_from_text(text)
+        if found is not None:
+            return found, field
+    return None, ""
+
+
 class GreenhouseSite(WholeBoardSite):
     """``boards.greenhouse.io/<token>`` via the public Job Board API."""
 
@@ -566,26 +1059,44 @@ class GreenhouseSite(WholeBoardSite):
 
     def fetch_all(self, session: requests.Session) -> list[Posting]:
         payload = self._get_json(session, self.api_url, content="true")
-        postings = []
-        for job in payload.get("jobs") or []:
-            location = str((job.get("location") or {}).get("name") or "")
-            city, state = split_location(location)
-            postings.append(
-                Posting(
-                    job_id=f"{self.id_prefix}{job.get('id')}",
-                    title=str(job.get("title") or "").strip() or "Unknown title",
-                    url=str(job.get("absolute_url") or self.search_url),
-                    company=self.name,
-                    city=city,
-                    state=state,
-                    # Greenhouse has no remote field; the location is all there is.
-                    is_remote=remote_from_text(location),
-                    posted_date=str(job.get("first_published") or job.get("updated_at") or ""),
-                    # The content field is HTML that has been entity-escaped again.
-                    description=html_to_text(html.unescape(str(job.get("content") or ""))),
-                )
-            )
-        return postings
+        return [self._posting(job) for job in payload.get("jobs") or []]
+
+    def lookup(
+        self, session: requests.Session, url: str, native_id: str = "", title: str = ""
+    ) -> tuple[Posting, dict[str, Any]]:
+        # boards.greenhouse.io/<token>/jobs/<id>, or a careers page with ?gh_jid=<id>
+        parsed = urlparse(url)
+        job_id = native_id or (parse_qs(parsed.query).get("gh_jid") or [""])[0]
+        if not job_id:
+            match = re.search(r"/jobs/(\d+)", parsed.path)
+            job_id = match.group(1) if match else ""
+        if not job_id:
+            raise UnsupportedSiteError(f"Couldn't find a Greenhouse job ID in {url}")
+        payload = self._get_json(session, f"{self.api_url}/{job_id}")
+        return self._posting(payload), payload
+
+    def _posting(self, job: dict[str, Any]) -> Posting:
+        location = str((job.get("location") or {}).get("name") or "")
+        city, state = split_location(location)
+        # Greenhouse has no standard remote field: a company's own
+        # "Workplace Type" field if it has one, else the location.
+        remote, field = greenhouse_workplace_field(job.get("metadata"))
+        note = field if remote is False else ""
+        if remote is None:
+            remote = remote_from_text(location)
+        return Posting(
+            job_id=f"{self.id_prefix}{job.get('id')}",
+            title=str(job.get("title") or "").strip() or "Unknown title",
+            url=str(job.get("absolute_url") or self.search_url),
+            company=self.name,
+            city=city,
+            state=state,
+            is_remote=remote,
+            remote_note=note,
+            posted_date=str(job.get("first_published") or job.get("updated_at") or ""),
+            # The content field is HTML that has been entity-escaped again.
+            description=html_to_text(html.unescape(str(job.get("content") or "")), keep_lines=True),
+        )
 
 
 # Lever's workplaceType; "unspecified" (or missing) falls back to the location.

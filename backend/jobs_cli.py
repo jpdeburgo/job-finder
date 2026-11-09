@@ -9,6 +9,10 @@ Examples::
     python jobs_cli.py applied accenture-R00212345 --note "Applied via IG site"
     python jobs_cli.py skip insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba
     python jobs_cli.py status insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba interviewing
+    python jobs_cli.py onsite insight-global-98f09cc8-df65-482e-9fff-701b877de516   # not actually remote
+    python jobs_cli.py hybrid accenture-R00212345
+    python jobs_cli.py remote accenture-R00212345          # it is remote, whatever the site says
+    python jobs_cli.py arrangement accenture-R00212345 site   # back to what the site says
     python jobs_cli.py migrate local_firestore.json    # copy local data to Firebase
 
 Without Firebase credentials, everything is read from and written to
@@ -33,6 +37,7 @@ from job_store import (
     DEFAULT_JOBS_COLLECTION,
     DEFAULT_LOCAL_DB_PATH,
     JOB_STATUSES,
+    WORK_ARRANGEMENTS,
     STATUS_APPLIED,
     STATUS_SKIPPED,
     STATUS_UNEMAILED,
@@ -117,6 +122,35 @@ def cmd_status(store: FirestoreJobStore, args: argparse.Namespace) -> int:
     return _set_status(store, args.job_id, args.status, args.note)
 
 
+ARRANGEMENT_LABELS = {"remote": "Remote", "hybrid": "Hybrid", "on_site": "On-site", None: "what the site says"}
+
+
+def _set_arrangement(store: FirestoreJobStore, job_id: str, value: str | None) -> int:
+    try:
+        job = store.update_job(job_id, work_arrangement=value, clear_work_arrangement=value is None)
+    except KeyError as error:
+        print(error.args[0], file=sys.stderr)
+        return 1
+    print(f"Job {job_id} -> {ARRANGEMENT_LABELS[value]}: {job.get('title') or '(no title)'}")
+    return 0
+
+
+def cmd_onsite(store: FirestoreJobStore, args: argparse.Namespace) -> int:
+    return _set_arrangement(store, args.job_id, "on_site")
+
+
+def cmd_hybrid(store: FirestoreJobStore, args: argparse.Namespace) -> int:
+    return _set_arrangement(store, args.job_id, "hybrid")
+
+
+def cmd_remote(store: FirestoreJobStore, args: argparse.Namespace) -> int:
+    return _set_arrangement(store, args.job_id, "remote")
+
+
+def cmd_arrangement(store: FirestoreJobStore, args: argparse.Namespace) -> int:
+    return _set_arrangement(store, args.job_id, None if args.arrangement == "site" else args.arrangement)
+
+
 def cmd_migrate(store: FirestoreJobStore, args: argparse.Namespace) -> int:
     """Copy the jobs in a local_firestore.json snapshot into the store."""
     path = Path(args.path)
@@ -180,6 +214,19 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p.add_argument("job_id")
     p.add_argument("status", choices=JOB_STATUSES)
     p.add_argument("--note")
+
+    p = add("onsite", "mark a job on-site: not actually remote, whatever the site says", cmd_onsite)
+    p.add_argument("job_id")
+
+    p = add("hybrid", "mark a job hybrid: not actually remote, whatever the site says", cmd_hybrid)
+    p.add_argument("job_id")
+
+    p = add("remote", "mark a job remote, whatever the site (or the on-site checks) say", cmd_remote)
+    p.add_argument("job_id")
+
+    p = add("arrangement", "set how a job is worked; 'site' goes back to what the site says", cmd_arrangement)
+    p.add_argument("job_id")
+    p.add_argument("arrangement", choices=[*WORK_ARRANGEMENTS, "site"])
 
     p = add("migrate", "copy a local_firestore.json file's jobs into the database", cmd_migrate)
     p.add_argument("path", nargs="?", default=str(DEFAULT_LOCAL_DB_PATH))

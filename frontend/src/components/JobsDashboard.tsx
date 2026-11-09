@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertCircleIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Sheet } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -18,11 +18,13 @@ import {
   type JobFilters,
   type SortKey,
 } from "@/lib/jobs";
-import { JOB_STATUSES, type Job, type JobPatch, type JobStatus, type StoreInfo } from "@/lib/types";
+import { DEFAULT_PAGE_SIZE, paginate, type PageSize } from "@/lib/pagination";
+import { JOB_STATUSES, type Job, type JobPatch, type JobStatus, type StoreInfo, type WorkArrangement } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { FilterBar } from "./FilterBar";
 import { JobDetails } from "./JobDetails";
 import { JobRow } from "./JobRow";
+import { Pagination } from "./Pagination";
 import { RunSearchPanel } from "./RunSearchPanel";
 import { statusClasses, statusLabel } from "./StatusBadge";
 import { StoreBanner } from "./StoreBanner";
@@ -32,16 +34,28 @@ interface Props {
   initialStore: StoreInfo;
   /** Starting filters, e.g. from `/jobs?status=applied`. */
   initialFilters?: JobFilters;
+  /** Starting page and page size, e.g. from `/jobs?page=2&per_page=50`. */
+  initialPage?: number;
+  initialPageSize?: PageSize;
 }
 
 const HEADERS = ["", "Job", "Fit", "Track", "Skills", "Salary", "Posted", "Last seen", "Status", "Applied"];
 
 /** The whole interactive dashboard: banner, summary, filters, table, and details drawer. */
-export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFAULT_FILTERS }: Props) {
+export function JobsDashboard({
+  initialJobs,
+  initialStore,
+  initialFilters = DEFAULT_FILTERS,
+  initialPage = 1,
+  initialPageSize = DEFAULT_PAGE_SIZE,
+}: Props) {
   const [jobs, setJobs] = useState<Job[]>(initialJobs);
   const [store, setStore] = useState<StoreInfo>(initialStore);
   const [filters, setFilters] = useState<JobFilters>(initialFilters);
   const [sort, setSort] = useState<SortKey>("last_seen");
+  const [page, setPage] = useState(initialPage);
+  const [pageSize, setPageSize] = useState<PageSize>(initialPageSize);
+  const tableRef = useRef<HTMLDivElement>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
@@ -52,16 +66,43 @@ export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFA
   const remoteStatuses = useMemo(() => distinctRemoteStatuses(jobs), [jobs]);
   const tracks = useMemo(() => distinctTracks(jobs), [jobs]);
   const visible = useMemo(() => sortJobs(filterJobs(jobs, filters), sort), [jobs, filters, sort]);
+  // The page is clamped here, so a page that emptied (say, the last job on it
+  // changed status and left the filter) shows the last page that has jobs.
+  const current = useMemo(() => paginate(visible, page, pageSize), [visible, page, pageSize]);
   const selected = useMemo(() => jobs.find((job) => job.id === selectedId) ?? null, [jobs, selectedId]);
 
-  // Keep ?status= in the address bar in step with the status filter, so a
-  // reload or a shared link opens the same view (the home screen links here).
+  // Keep ?status=, ?page=, and ?per_page= in the address bar in step with the
+  // view, so a reload or a shared link opens the same view (the home screen
+  // links here). Defaults are left out.
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (filters.status === "all") url.searchParams.delete("status");
-    else url.searchParams.set("status", filters.status);
+    const set = (name: string, value: string | null) =>
+      value === null ? url.searchParams.delete(name) : url.searchParams.set(name, value);
+    set("status", filters.status === "all" ? null : filters.status);
+    set("page", current.page === 1 ? null : String(current.page));
+    set("per_page", pageSize === DEFAULT_PAGE_SIZE ? null : String(pageSize));
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
-  }, [filters.status]);
+  }, [filters.status, current.page, pageSize]);
+
+  // A different filter, sort, or page size starts again at page 1.
+  const updateFilters = (update: JobFilters | ((current: JobFilters) => JobFilters)) => {
+    setFilters(update);
+    setPage(1);
+  };
+  const updateSort = (next: SortKey) => {
+    setSort(next);
+    setPage(1);
+  };
+  const updatePageSize = (next: PageSize) => {
+    setPageSize(next);
+    setPage(1);
+  };
+  const goToPage = (next: number) => {
+    setPage(next);
+    // Back to the top of the table if it has scrolled out of view.
+    const top = tableRef.current?.getBoundingClientRect().top;
+    if (top !== undefined && top < 0) tableRef.current?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  };
 
   const setBusy = (id: string, busy: boolean) =>
     setBusyIds((current) => {
@@ -85,13 +126,22 @@ export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFA
     }
   }, []);
 
-  const changeStatus = (id: string, status: JobStatus) => {
-    applyPatch(id, { status }).catch(() => {
+  const changeStatus = useCallback(
+    (id: string, status: JobStatus) => {
+      applyPatch(id, { status }).catch(() => {
+        /* surfaced via `error` */
+      });
+    },
+    [applyPatch],
+  );
+
+  const saveNotes = (id: string, notes: string) => applyPatch(id, { notes });
+
+  const changeArrangement = (id: string, workArrangement: WorkArrangement | null) => {
+    applyPatch(id, { work_arrangement: workArrangement }).catch(() => {
       /* surfaced via `error` */
     });
   };
-
-  const saveNotes = (id: string, notes: string) => applyPatch(id, { notes });
 
   const refresh = async () => {
     setRefreshing(true);
@@ -119,7 +169,9 @@ export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFA
           type="single"
           aria-label="Filter by status"
           value={filters.status === "all" ? "" : filters.status}
-          onValueChange={(value) => setFilters((current) => ({ ...current, status: (value || "all") as JobStatus | "all" }))}
+          onValueChange={(value) =>
+            updateFilters((current) => ({ ...current, status: (value || "all") as JobStatus | "all" }))
+          }
           className="flex-wrap gap-1.5"
         >
           {JOB_STATUSES.filter((status) => counts[status]).map((status) => (
@@ -138,7 +190,7 @@ export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFA
           ))}
         </ToggleGroup>
         <span className="text-muted-foreground text-xs">
-          {jobs.length} tracked · {visible.length} shown
+          {jobs.length} tracked · {visible.length} match
         </span>
       </div>
 
@@ -149,8 +201,8 @@ export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFA
         remoteStatuses={remoteStatuses}
         tracks={tracks}
         refreshing={refreshing}
-        onFiltersChange={setFilters}
-        onSortChange={setSort}
+        onFiltersChange={updateFilters}
+        onSortChange={updateSort}
         onRefresh={refresh}
       />
 
@@ -162,7 +214,7 @@ export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFA
         </Alert>
       )}
 
-      <div className="rounded-lg border">
+      <div ref={tableRef} className="scroll-mt-4 rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
@@ -183,20 +235,24 @@ export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFA
                 </TableCell>
               </TableRow>
             ) : (
-              visible.map((job) => (
+              current.items.map((job) => (
                 <JobRow
                   key={job.id}
                   job={job}
                   selected={selectedId === job.id}
                   busy={busyIds.has(job.id)}
-                  onSelect={() => setSelectedId(job.id)}
-                  onStatusChange={(status) => changeStatus(job.id, status)}
+                  onSelect={setSelectedId}
+                  onStatusChange={changeStatus}
                 />
               ))
             )}
           </TableBody>
         </Table>
       </div>
+
+      {visible.length > 0 && (
+        <Pagination page={current} pageSize={pageSize} onPageChange={goToPage} onPageSizeChange={updatePageSize} />
+      )}
 
       <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelectedId(null)}>
         {selected && (
@@ -206,6 +262,7 @@ export function JobsDashboard({ initialJobs, initialStore, initialFilters = DEFA
             busy={busyIds.has(selected.id)}
             onStatusChange={(status) => changeStatus(selected.id, status)}
             onNotesSave={(notes) => saveNotes(selected.id, notes)}
+            onArrangementChange={(value) => changeArrangement(selected.id, value)}
           />
         )}
       </Sheet>

@@ -83,7 +83,7 @@ describe("rendering", () => {
   it("lists jobs newest-first", () => {
     renderDashboard();
     expect(rowIds()).toEqual(["job-row-react", "job-row-python", "job-row-java"]);
-    expect(screen.getByText("3 tracked · 3 shown")).toBeInTheDocument();
+    expect(screen.getByText("3 tracked · 3 match")).toBeInTheDocument();
   });
 
   it("shows each job's company", () => {
@@ -309,6 +309,36 @@ describe("updating jobs", () => {
     expect(chips().getByRole("radio", { name: /Interviewing 1/ })).toBeInTheDocument();
   });
 
+  it("marks a job on-site from the details drawer, and back to what the site says", async () => {
+    const user = setupUser();
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ job: { ...react, work_arrangement: "on_site", is_remote: false, site_is_remote: true } }),
+    );
+    renderDashboard();
+    expect(row("react").getByText("Remote")).toBeInTheDocument();
+
+    await user.click(row("react").getByRole("button", { name: /Show details/ }));
+    const drawer = () => within(screen.getByRole("dialog"));
+    const select = () => drawer().getByRole("combobox", { name: "Work arrangement for job react" });
+    expect(select()).toHaveTextContent("As the site says (Remote)");
+    await choose(user, select(), "On-site");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/react",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ work_arrangement: "on_site" }) }),
+    );
+    await waitFor(() => expect(row("react").getByText("On-site (you)")).toBeInTheDocument());
+    expect(select()).toHaveTextContent("On-site");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ job: react }));
+    await choose(user, select(), "As the site says (Remote)");
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/jobs/react",
+      expect.objectContaining({ body: JSON.stringify({ work_arrangement: null }) }),
+    );
+    await waitFor(() => expect(row("react").getByText("Remote")).toBeInTheDocument());
+  });
+
   it("marks a job applied from the row button", async () => {
     const user = setupUser();
     fetchMock.mockResolvedValueOnce(jsonResponse({ job: { ...react, status: "applied", applied_at: "2026-11-02T10:00:00+00:00" } }));
@@ -382,6 +412,21 @@ describe("details drawer", () => {
     expect(fit.getByText("−8")).toBeInTheDocument();
     expect(fit.getByText("−4")).toBeInTheDocument();
     expect(fit.getByText("Asks for 6+ yrs; you have 5 (1 short)")).toBeInTheDocument();
+  });
+
+  it("says why a job listed as remote was marked not remote", async () => {
+    const user = setupUser();
+    renderDashboard([
+      makeJob({ id: "onsite", is_remote: false, not_remote_reason: 'its description: "must be onsite in Plano"' }),
+      makeJob({ id: "remote", is_remote: true }),
+    ]);
+
+    await user.click(row("onsite").getByRole("button", { name: /Show details/ }));
+    const details = within(await screen.findByRole("dialog"));
+    expect(details.getByText("Not remote")).toBeInTheDocument();
+    expect(details.getByTestId("not-remote-reason")).toHaveTextContent(
+      'Listed as remote, but its description: "must be onsite in Plano".',
+    );
   });
 
   it("shows a dash, and no fit section, for jobs saved before the fit score existed", async () => {
@@ -566,5 +611,107 @@ describe("status in the address bar", () => {
     await user.click(chips().getByRole("radio", { name: /Applied 1/ }));
     expect(new URLSearchParams(window.location.search).get("utm")).toBe("digest");
     expect(new URLSearchParams(window.location.search).get("status")).toBe("applied");
+  });
+});
+
+
+// Paging mounts a fresh page of rows (each with its own dropdowns) per step,
+// which is slow in jsdom, though instant in a browser.
+describe("pagination", { timeout: 20_000 }, () => {
+  // 60 jobs, newest first: job-01 is the most recently seen.
+  const many = Array.from({ length: 60 }, (_, index) => {
+    const n = String(index + 1).padStart(2, "0");
+    const minute = String(59 - index).padStart(2, "0");
+    return makeJob({ id: `job-${n}`, title: `Job ${n}`, last_seen_at: `2026-11-01T10:${minute}:00+00:00` });
+  });
+  const pager = () => within(screen.getByRole("navigation", { name: "Pagination" }));
+
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/jobs");
+  });
+
+  it("shows 25 jobs a page and moves between pages", async () => {
+    const user = setupUser();
+    renderDashboard(many);
+
+    expect(rowIds()).toHaveLength(25);
+    expect(rowIds()[0]).toBe("job-row-job-01");
+    expect(screen.getByText("Showing 1–25 of 60 jobs")).toBeInTheDocument();
+    expect(pager().getByRole("button", { name: "Page 1" })).toHaveAttribute("aria-current", "page");
+    expect(pager().getByRole("button", { name: "Previous page" })).toBeDisabled();
+
+    await user.click(pager().getByRole("button", { name: "Next page" }));
+    expect(rowIds()[0]).toBe("job-row-job-26");
+    expect(screen.getByText("Showing 26–50 of 60 jobs")).toBeInTheDocument();
+    expect(window.location.search).toBe("?page=2");
+
+    await user.click(pager().getByRole("button", { name: "Last page" }));
+    expect(rowIds()).toHaveLength(10);
+    expect(screen.getByText("Showing 51–60 of 60 jobs")).toBeInTheDocument();
+    expect(pager().getByRole("button", { name: "Next page" })).toBeDisabled();
+
+    await user.click(pager().getByRole("button", { name: "Page 1" }));
+    expect(rowIds()[0]).toBe("job-row-job-01");
+    expect(window.location.search).toBe("");
+  });
+
+  it("changes the page size and starts again at page 1", async () => {
+    const user = setupUser();
+    renderDashboard(many);
+    await user.click(pager().getByRole("button", { name: "Page 2" }));
+
+    await choose(user, screen.getByRole("combobox", { name: "Rows per page" }), "50");
+
+    expect(rowIds()).toHaveLength(50);
+    expect(rowIds()[0]).toBe("job-row-job-01");
+    expect(screen.getByText("Showing 1–50 of 60 jobs")).toBeInTheDocument();
+    expect(window.location.search).toBe("?per_page=50");
+  });
+
+  it("goes back to page 1 when the filters or sort change", async () => {
+    const user = setupUser();
+    renderDashboard(many);
+    await user.click(pager().getByRole("button", { name: "Page 3" }));
+
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "Job 3");
+
+    // "Job 30" to "Job 39", from the top: page 3 would be past the end.
+    expect(rowIds()).toEqual(Array.from({ length: 10 }, (_, index) => `job-row-job-${30 + index}`));
+    expect(screen.getByText("Showing 1–10 of 10 jobs")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument(); // one page
+
+    // Sorting starts over too.
+    await user.clear(screen.getByRole("searchbox", { name: "Search" }));
+    await user.click(pager().getByRole("button", { name: "Page 2" }));
+    await choose(user, screen.getByRole("combobox", { name: "Sort" }), "Title (A–Z)");
+    expect(screen.getByText("Showing 1–25 of 60 jobs")).toBeInTheDocument();
+  });
+
+  it("opens on the page in the address", () => {
+    render(<JobsDashboard initialJobs={many} initialStore={store} initialPage={2} initialPageSize={50} />);
+
+    expect(rowIds()).toHaveLength(10);
+    expect(screen.getByText("Showing 51–60 of 60 jobs")).toBeInTheDocument();
+  });
+
+  it("shows the last page that has jobs when the page empties", async () => {
+    const user = setupUser();
+    // 26 "emailed" jobs: page 2 holds one. Skipping it moves it out of the filter.
+    const emailed = many.slice(0, 26).map((job) => ({ ...job, status: "emailed" }));
+    render(
+      <JobsDashboard
+        initialJobs={[...emailed, ...many.slice(26).map((job) => ({ ...job, status: "applied" }))]}
+        initialStore={store}
+        initialFilters={{ ...DEFAULT_FILTERS, status: "emailed" }}
+        initialPage={2}
+      />,
+    );
+    expect(rowIds()).toEqual(["job-row-job-26"]);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ job: { ...emailed[25], status: "skipped" } }));
+
+    await choose(user, row("job-26").getByRole("combobox", { name: "Status for job job-26" }), "Skipped");
+
+    await waitFor(() => expect(rowIds()).toHaveLength(25));
+    expect(screen.getByText("Showing 1–25 of 25 jobs")).toBeInTheDocument();
   });
 });

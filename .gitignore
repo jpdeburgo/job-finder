@@ -14,8 +14,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to the repo root: a bare "lib/" also matched frontend/src/lib,
+# which is source code, so it was never tracked (or included in bundles).
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -252,3 +254,6 @@ firebase-debug.log*
 firestore-debug.log*
 ui-debug.log*
 pubsub-debug.log*
+
+# job_search.py --recheck-saved
+backend/remote_check_report.txt

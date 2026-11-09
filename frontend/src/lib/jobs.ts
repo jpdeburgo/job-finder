@@ -1,0 +1,383 @@
+/**
+ * Pure helpers for job documents: normalising raw Firestore/JSON data into
+ * the `Job` type, sorting, filtering, and display formatting. No I/O here, so
+ * everything is trivially unit-testable and usable on both server and client.
+ */
+
+import type { Job, JobStatus } from "./types";
+import { JOB_STATUSES, WORK_ARRANGEMENT_LABELS, isWorkArrangement } from "./types";
+
+// --- Normalisation ----------------------------------------------------------
+
+/** Fields the Python store writes as datetimes (Firestore Timestamps). */
+const TIMESTAMP_FIELDS = [
+  "first_seen_at",
+  "last_seen_at",
+  "emailed_at",
+  "applied_at",
+  "status_updated_at",
+  "work_arrangement_set_at",
+] as const;
+
+/**
+ * Convert a Firestore `Timestamp`, a `Date`, or an ISO string into an ISO
+ * string. Anything else becomes `null`.
+ */
+export function toIsoString(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value === "object" && typeof (value as { toDate?: unknown }).toDate === "function") {
+    return toIsoString((value as { toDate: () => Date }).toDate());
+  }
+  if (typeof value === "string") return value;
+  return null;
+}
+
+function asString(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return null;
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function asNumberRecord(value: unknown): Record<string, number> {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return {};
+  const record: Record<string, number> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const number = asNumber(item);
+    if (number !== null) record[key] = number;
+  }
+  return record;
+}
+
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+/** Turn a raw document (from either store) into a `Job`. */
+export function normalizeJob(id: string, data: Record<string, unknown>): Job {
+  const matchedSkills = asStringList(data.matched_skills);
+  const siteIsRemote = asBoolean(data.is_remote);
+  const arrangement = isWorkArrangement(data.work_arrangement) ? data.work_arrangement : null;
+  return {
+    id,
+    job_id: asString(data.job_id) ?? id,
+    company: asString(data.company),
+    title: asString(data.title),
+    city: asString(data.city),
+    state: asString(data.state),
+    // Your say wins over the site's (same as normalize_job in backend/job_queries.py).
+    is_remote: arrangement ? arrangement === "remote" : siteIsRemote,
+    work_arrangement: arrangement,
+    site_is_remote: siteIsRemote,
+    work_arrangement_set_at: toIsoString(data.work_arrangement_set_at),
+    job_type: asString(data.job_type),
+    salary_low: asNumber(data.salary_low),
+    salary_high: asNumber(data.salary_high),
+    url: asString(data.url),
+    track: asString(data.track),
+    posted_date: asString(data.posted_date),
+    matched_skills: matchedSkills,
+    score: asNumber(data.score) ?? (matchedSkills.length ? matchedSkills.length : null),
+    min_years: asNumber(data.min_years),
+    fit_score: asNumber(data.fit_score),
+    fit_breakdown: asNumberRecord(data.fit_breakdown),
+    fit_reasons: asStringList(data.fit_reasons),
+    not_remote_reason: asString(data.not_remote_reason),
+    status: asString(data.status) ?? "unknown",
+    notes: asString(data.notes),
+    first_seen_at: toIsoString(data.first_seen_at),
+    last_seen_at: toIsoString(data.last_seen_at),
+    emailed_at: toIsoString(data.emailed_at),
+    applied_at: toIsoString(data.applied_at),
+    status_updated_at: toIsoString(data.status_updated_at),
+    gmail_message_id: asString(data.gmail_message_id),
+  };
+}
+
+export { TIMESTAMP_FIELDS };
+
+// --- Classification -----------------------------------------------------------
+
+/**
+ * Whether a job is remote. "unmarked" means the site didn't say; the search
+ * script only saves those when run with `--include-unmarked`.
+ */
+export type RemoteStatus = "remote" | "unmarked" | "not_remote";
+
+export const REMOTE_STATUS_INFO: Record<RemoteStatus, { label: string; hint: string }> = {
+  remote: { label: "Remote", hint: "The site marks this job remote." },
+  unmarked: {
+    label: "Remote not stated",
+    hint: "The site doesn't say whether this job is remote, hybrid, or on-site. Check the posting.",
+  },
+  not_remote: { label: "Not remote", hint: "The site marks this job hybrid or on-site." },
+};
+
+/** "On-site (you)", when you've said how a job is worked; null otherwise. */
+export function workArrangementLabel(job: Pick<Job, "work_arrangement">): string | null {
+  return job.work_arrangement ? `${WORK_ARRANGEMENT_LABELS[job.work_arrangement]} (you)` : null;
+}
+
+export function remoteStatus(job: Pick<Job, "is_remote">): RemoteStatus {
+  if (job.is_remote === true) return "remote";
+  if (job.is_remote === false) return "not_remote";
+  return "unmarked";
+}
+
+export function hasApplied(job: Job): boolean {
+  return job.status === "applied" || job.applied_at != null;
+}
+
+/** Short label for the track column ("Core", "Java", "iOS", ".NET"). */
+export function trackLabel(track: string | null): string {
+  if (!track) return "—";
+  const lower = track.toLowerCase();
+  if (lower.startsWith("core")) return "Core";
+  if (lower.startsWith("java")) return "Java";
+  if (lower.startsWith("ios")) return "iOS";
+  if (lower.startsWith(".net")) return ".NET";
+  return track.split(" ")[0];
+}
+
+// --- Links --------------------------------------------------------------------
+
+/** Deep link that opens the digest email this job was sent in. */
+export function gmailMessageUrl(messageId: string | null): string | null {
+  if (!messageId) return null;
+  return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(messageId)}`;
+}
+
+/** Insight Global search for the job's title, handy when a posting has moved. */
+export function insightGlobalSearchUrl(title: string | null): string | null {
+  if (!title) return null;
+  return `https://insightglobal.com/jobs/search/all/all?keyword=${encodeURIComponent(title)}`;
+}
+
+export interface JobLink {
+  label: string;
+  href: string;
+}
+
+/** Every clickable destination for a job, in display order. */
+export function jobLinks(job: Job): JobLink[] {
+  const links: JobLink[] = [];
+  if (job.url) links.push({ label: "Job posting", href: job.url });
+  const gmail = gmailMessageUrl(job.gmail_message_id);
+  if (gmail) links.push({ label: "Digest email", href: gmail });
+  const search = insightGlobalSearchUrl(job.title);
+  if (search) links.push({ label: "Search Insight Global", href: search });
+  return links;
+}
+
+// --- Formatting -----------------------------------------------------------------
+
+/** Same wording as `format_salary` in backend/job_search.py. */
+export function formatSalary(job: Pick<Job, "salary_low" | "salary_high">): string {
+  const low = job.salary_low ?? 0;
+  const high = job.salary_high ?? 0;
+  const money = (value: number) => `$${Math.round(value).toLocaleString("en-US")}`;
+  if (!low && !high) return "Not listed";
+  if (!low) return `Up to ${money(high)}`;
+  if (!high) return `From ${money(low)}`;
+  return `${money(low)} - ${money(high)}`;
+}
+
+export function formatLocation(job: Pick<Job, "city" | "state">): string {
+  const parts = [job.city, job.state].filter((part): part is string => !!part && part.trim() !== "");
+  return parts.length ? parts.join(", ") : "—";
+}
+
+/** "2026-11-01" for any ISO timestamp or date string; "—" when absent. */
+export function formatDate(value: string | null): string {
+  if (!value) return "—";
+  return value.length >= 10 ? value.slice(0, 10) : value;
+}
+
+// --- Fit score ------------------------------------------------------------------
+
+/** Score bands; keep in sync with FIT_LABELS in backend/job_fit.py. */
+export const FIT_LABELS = [
+  { min: 75, label: "Strong" },
+  { min: 60, label: "Good" },
+  { min: 40, label: "Fair" },
+  { min: 0, label: "Weak" },
+] as const;
+
+export type FitLabel = (typeof FIT_LABELS)[number]["label"];
+
+/** "Strong", "Good", "Fair", or "Weak"; null for jobs saved before the fit score existed. */
+export function fitLabel(score: number | null): FitLabel | null {
+  if (score == null) return null;
+  return (FIT_LABELS.find((band) => score >= band.min) ?? FIT_LABELS[FIT_LABELS.length - 1]).label;
+}
+
+/** Display names for the parts of `fit_breakdown`, in the order they're applied. */
+export const FIT_PARTS: { key: string; label: string }[] = [
+  { key: "skills", label: "Skills" },
+  { key: "role", label: "Role" },
+  { key: "experience", label: "Experience" },
+  { key: "remote", label: "Remote" },
+  { key: "stack", label: "Other tech" },
+];
+
+export function formatYears(minYears: number | null): string {
+  return minYears == null ? "not stated" : `${minYears}+ yrs`;
+}
+
+// --- Sorting --------------------------------------------------------------------
+
+export type SortKey = "last_seen" | "posted" | "salary" | "score" | "fit" | "title" | "status";
+
+export const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: "last_seen", label: "Last seen (newest)" },
+  { value: "posted", label: "Posted (newest)" },
+  { value: "salary", label: "Salary (highest)" },
+  { value: "score", label: "Skill matches (most)" },
+  { value: "fit", label: "Best fit" },
+  { value: "title", label: "Title (A–Z)" },
+  { value: "status", label: "Status" },
+];
+
+function seenKey(job: Job): string {
+  return job.last_seen_at ?? job.first_seen_at ?? "";
+}
+
+/** Newest `last_seen_at` first, matching `FirestoreJobStore.list_jobs`. */
+export function sortNewestFirst(jobs: Job[]): Job[] {
+  return [...jobs].sort((a, b) => seenKey(b).localeCompare(seenKey(a)));
+}
+
+/**
+ * What "Salary (highest)" sorts by: the higher of the two amounts that are
+ * actually set, so "From $140,000" counts as 140,000. The search script saves
+ * a missing amount as 0, so 0 and null both mean "not listed" (null here).
+ */
+export function salarySortValue(job: Pick<Job, "salary_low" | "salary_high">): number | null {
+  const amounts = [job.salary_high, job.salary_low].filter((value): value is number => value != null && value > 0);
+  return amounts.length ? Math.max(...amounts) : null;
+}
+
+export function sortJobs(jobs: Job[], key: SortKey): Job[] {
+  const byNewest = sortNewestFirst(jobs);
+  const compareNumberDesc = (a: number | null, b: number | null) => (b ?? -1) - (a ?? -1);
+  switch (key) {
+    case "last_seen":
+      return byNewest;
+    case "posted":
+      return byNewest.sort((a, b) => (b.posted_date ?? "").localeCompare(a.posted_date ?? ""));
+    case "salary":
+      // Highest first; "Not listed" always last (newest first among them).
+      return byNewest.sort((a, b) => {
+        const [salaryA, salaryB] = [salarySortValue(a), salarySortValue(b)];
+        if (salaryA === null || salaryB === null) return (salaryA === null ? 1 : 0) - (salaryB === null ? 1 : 0);
+        return salaryB - salaryA;
+      });
+    case "score":
+      return byNewest.sort((a, b) => compareNumberDesc(a.score, b.score));
+    case "fit":
+      return byNewest.sort((a, b) => compareNumberDesc(a.fit_score, b.fit_score));
+    case "title":
+      return byNewest.sort((a, b) => (a.title ?? "\uffff").localeCompare(b.title ?? "\uffff"));
+    case "status":
+      return byNewest.sort((a, b) => statusOrder(a.status) - statusOrder(b.status));
+  }
+}
+
+function statusOrder(status: string): number {
+  const index = (JOB_STATUSES as readonly string[]).indexOf(status);
+  return index === -1 ? JOB_STATUSES.length : index;
+}
+
+// --- Filtering ------------------------------------------------------------------
+
+export interface JobFilters {
+  /** Case-insensitive match against title, company, skills, location, job type, notes, ID. */
+  query: string;
+  status: JobStatus | "all";
+  company: string | "all";
+  remote: RemoteStatus | "all";
+  track: string | "all";
+}
+
+export const DEFAULT_FILTERS: JobFilters = {
+  query: "",
+  status: "all",
+  company: "all",
+  remote: "all",
+  track: "all",
+};
+
+export function filterJobs(jobs: Job[], filters: JobFilters): Job[] {
+  const query = filters.query.trim().toLowerCase();
+  return jobs.filter((job) => {
+    if (filters.status !== "all" && job.status !== filters.status) return false;
+    if (filters.company !== "all" && job.company !== filters.company) return false;
+    if (filters.remote !== "all" && remoteStatus(job) !== filters.remote) return false;
+    if (filters.track !== "all" && job.track !== filters.track) return false;
+    if (!query) return true;
+    const haystack = [
+      job.title,
+      job.company,
+      job.city,
+      job.state,
+      job.job_type,
+      job.notes,
+      job.job_id,
+      job.track,
+      ...job.matched_skills,
+    ]
+      .filter((part): part is string => !!part)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+/** How many jobs are in each status, for the summary chips. */
+export function countByStatus(jobs: Job[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const job of jobs) counts[job.status] = (counts[job.status] ?? 0) + 1;
+  return counts;
+}
+
+/**
+ * The remote statuses your jobs actually have, in a fixed order, for the
+ * remote filter. By default the search script only saves remote jobs, so
+ * "Not remote" only shows up if remote-only was turned off for a site.
+ */
+export function distinctRemoteStatuses(jobs: Job[]): RemoteStatus[] {
+  const present = new Set(jobs.map(remoteStatus));
+  return (Object.keys(REMOTE_STATUS_INFO) as RemoteStatus[]).filter((status) => present.has(status));
+}
+
+/** Distinct company names, alphabetically, for the company filter. */
+export function distinctCompanies(jobs: Job[]): string[] {
+  const companies = new Set<string>();
+  for (const job of jobs) if (job.company) companies.add(job.company);
+  return [...companies].sort((a, b) => a.localeCompare(b));
+}
+
+/** Distinct track names in first-seen order, for the track filter. */
+export function distinctTracks(jobs: Job[]): string[] {
+  const tracks: string[] = [];
+  for (const job of jobs) {
+    if (job.track && !tracks.includes(job.track)) tracks.push(job.track);
+  }
+  return tracks;
+}

@@ -59,6 +59,11 @@ JOB_STATUSES = (
     STATUS_OFFER,
 )
 
+# How you say a job is actually worked, overriding what the site claims
+# ("work_arrangement" on the job). Keep in sync with WORK_ARRANGEMENTS in
+# ../frontend/src/lib/types.ts.
+WORK_ARRANGEMENTS = ("remote", "hybrid", "on_site")
+
 DEFAULT_JOBS_COLLECTION = "jobs"
 DEFAULT_RUNS_COLLECTION = "runs"
 DEFAULT_LOCAL_DB_PATH = Path(__file__).with_name("local_firestore.json")
@@ -252,6 +257,20 @@ class FirestoreJobStore:
         }
         self._commit_in_batches([(self._doc_id(job_id), dict(fields)) for job_id in job_ids])
 
+    def mark_not_remote(self, reasons: dict[str, str]) -> None:
+        """Set ``is_remote`` to False on saved jobs whose posting says on-site or
+        hybrid, recording why in ``not_remote_reason``. Status is left alone."""
+        now = utcnow()
+        self._commit_in_batches(
+            [
+                (
+                    self._doc_id(job_id),
+                    {"is_remote": False, "not_remote_reason": reason, "remote_checked_at": now},
+                )
+                for job_id, reason in sorted(reasons.items())
+            ]
+        )
+
     def set_status(
         self, job_id: str, status: str, note: str | None = None
     ) -> dict[str, Any]:
@@ -263,21 +282,32 @@ class FirestoreJobStore:
         return reference.get().to_dict()
 
     def update_job(
-        self, job_id: str, status: str | None = None, notes: str | None = None
+        self,
+        job_id: str,
+        status: str | None = None,
+        notes: str | None = None,
+        work_arrangement: str | None = None,
+        clear_work_arrangement: bool = False,
     ) -> dict[str, Any]:
-        """Change a job's status and/or notes; return the updated document.
+        """Change a job's status, notes, and/or work arrangement; return the
+        updated document.
 
         Writes the same fields as the dashboard's PATCH /api/jobs/:id:
         ``status`` sets ``status_updated_at`` (and ``applied_at`` for
-        "applied"), and ``notes`` replaces the notes (``""`` clears them).
-        Raises ``KeyError`` for an unknown job, ``ValueError`` for an unknown
-        status or when there is nothing to change.
+        "applied"), ``notes`` replaces the notes (``""`` clears them), and
+        ``work_arrangement`` ("remote", "hybrid", "on_site") records how the
+        job is really worked, whatever the site says (``clear_work_arrangement``
+        goes back to the site's word). Raises ``KeyError`` for an unknown job,
+        ``ValueError`` for an unknown value or when there is nothing to change.
         """
-        if status is None and notes is None:
-            raise ValueError("Nothing to update: provide status and/or notes")
-        fields = self._status_fields(status, None, utcnow()) if status is not None else {}
+        if status is None and notes is None and work_arrangement is None and not clear_work_arrangement:
+            raise ValueError("Nothing to update: provide status, notes, and/or work_arrangement")
+        now = utcnow()
+        fields = self._status_fields(status, None, now) if status is not None else {}
         if notes is not None:
             fields["notes"] = notes
+        if work_arrangement is not None or clear_work_arrangement:
+            fields.update(self.work_arrangement_fields(work_arrangement, now))
         reference = self._jobs.document(self._doc_id(job_id))
         if not reference.get().exists:
             raise KeyError(f"Job {job_id} is not in the store")
@@ -334,6 +364,20 @@ class FirestoreJobStore:
         if is_new:
             fields.update(first_seen_at=now, status=STATUS_UNEMAILED, status_updated_at=now)
         return fields
+
+    @staticmethod
+    def work_arrangement_fields(value: str | None, now: datetime) -> dict[str, Any]:
+        """Fields for your say on a job's work arrangement (None clears it).
+
+        It lives next to the site's ``is_remote`` rather than replacing it, so
+        searches can keep refreshing the site's value without undoing yours;
+        readers use yours when it's set (job_queries.normalize_job).
+        """
+        if value is not None and value not in WORK_ARRANGEMENTS:
+            raise ValueError(
+                f"Unknown work arrangement {value!r}; expected one of {', '.join(WORK_ARRANGEMENTS)}"
+            )
+        return {"work_arrangement": value, "work_arrangement_set_at": now if value else None}
 
     @staticmethod
     def _status_fields(status: str, note: str | None, now: datetime) -> dict[str, Any]:

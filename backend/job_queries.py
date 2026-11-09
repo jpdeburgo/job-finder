@@ -14,9 +14,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Iterable, Literal, get_args
 
-from job_store import JOB_STATUSES, STATUS_APPLIED
+from job_store import JOB_STATUSES, STATUS_APPLIED, WORK_ARRANGEMENTS
 
-TIMESTAMP_FIELDS = ("first_seen_at", "last_seen_at", "emailed_at", "applied_at", "status_updated_at")
+TIMESTAMP_FIELDS = (
+    "first_seen_at", "last_seen_at", "emailed_at", "applied_at", "status_updated_at",
+    "work_arrangement_set_at",
+)
 # Same keys and directions as the dashboard's Sort menu.
 SortKey = Literal["last_seen", "posted", "salary", "score", "fit", "title", "status"]
 SORT_KEYS: tuple[str, ...] = get_args(SortKey)
@@ -75,7 +78,12 @@ def normalize_job(doc_id: str, data: dict[str, Any]) -> dict[str, Any]:
     ones are ``None``), timestamps as ISO strings. Same shape as ``Job`` in
     frontend/src/lib/types.ts."""
     skills = [skill for skill in data.get("matched_skills") or [] if isinstance(skill, str)]
-    is_remote = data.get("is_remote")
+    site_is_remote = data.get("is_remote")
+    site_is_remote = site_is_remote if isinstance(site_is_remote, bool) else None
+    arrangement = data.get("work_arrangement")
+    arrangement = arrangement if arrangement in WORK_ARRANGEMENTS else None
+    # Your say wins over the site's.
+    is_remote = (arrangement == "remote") if arrangement else site_is_remote
     score = _number(data.get("score"))
     job = {
         "id": doc_id,
@@ -84,7 +92,11 @@ def normalize_job(doc_id: str, data: dict[str, Any]) -> dict[str, Any]:
         "title": _string(data.get("title")),
         "city": _string(data.get("city")),
         "state": _string(data.get("state")),
-        "is_remote": is_remote if isinstance(is_remote, bool) else None,
+        "is_remote": is_remote,
+        # "remote" | "hybrid" | "on_site" when you've said; None otherwise.
+        "work_arrangement": arrangement,
+        # What the site (and the on-site checks) say, before your say.
+        "site_is_remote": site_is_remote,
         "job_type": _string(data.get("job_type")),
         "salary_low": _number(data.get("salary_low")),
         "salary_high": _number(data.get("salary_high")),
@@ -98,6 +110,8 @@ def normalize_job(doc_id: str, data: dict[str, Any]) -> dict[str, Any]:
         "fit_score": _number(data.get("fit_score")),
         "fit_breakdown": _breakdown(data.get("fit_breakdown")),
         "fit_reasons": [r for r in data.get("fit_reasons") or [] if isinstance(r, str)],
+        # Why a job the site called remote was marked not remote (on-site/hybrid wording).
+        "not_remote_reason": _string(data.get("not_remote_reason")),
         "status": _string(data.get("status")) or "unknown",
         "notes": _string(data.get("notes")),
         "gmail_message_id": _string(data.get("gmail_message_id")),

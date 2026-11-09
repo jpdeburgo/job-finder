@@ -167,6 +167,7 @@ def test_normalize_job_reads_the_fit_score():
         },
     )
     assert result["fit_score"] == 72
+    assert result["not_remote_reason"] is None
     assert result["fit_breakdown"] == {"skills": 48, "role": 30, "experience": -6}
     assert result["fit_reasons"] == ["Skills: Python"]
 
