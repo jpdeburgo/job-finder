@@ -157,7 +157,7 @@ def test_main_emails_only_unseen_jobs_and_persists_state(store, gmail, monkeypat
     store.mark_emailed(["id-1"], "earlier")
     store.set_status("id-1", "applied")
     monkeypatch.setattr(
-        job_search, "run_all_searches", lambda *_: [_job("id-1"), _job("id-2")]
+        job_search, "run_all_searches", lambda *_, **__: [_job("id-1"), _job("id-2")]
     )
 
     job_search.main(store)
@@ -175,7 +175,7 @@ def test_main_emails_only_unseen_jobs_and_persists_state(store, gmail, monkeypat
 def test_main_saves_unemailed_jobs_when_email_fails_and_retries_next_run(
     store, gmail, monkeypatch
 ):
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-2")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_, **__: [_job("id-2")])
 
     def failing_send(*args, **kwargs):
         raise RuntimeError("gmail down")
@@ -190,7 +190,7 @@ def test_main_saves_unemailed_jobs_when_email_fails_and_retries_next_run(
 
     # Next run: Gmail works again, job 2 still matches alongside a new job 3.
     monkeypatch.setattr(
-        job_search, "run_all_searches", lambda *_: [_job("id-2"), _job("id-3")]
+        job_search, "run_all_searches", lambda *_, **__: [_job("id-2"), _job("id-3")]
     )
 
     def working_send(service, subject, body, recipient, html=False):
@@ -211,7 +211,7 @@ def test_main_saves_unemailed_jobs_when_email_fails_and_retries_next_run(
 def test_main_with_nothing_new_sends_no_email(store, gmail, monkeypatch):
     store.save_matches([_job("id-2")], new_ids={"id-2"})
     store.mark_emailed(["id-2"], "earlier")
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-2")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_, **__: [_job("id-2")])
 
     job_search.main(store)
 
@@ -230,7 +230,7 @@ def test_main_without_gmail_set_up_prints_an_error_and_keeps_jobs(
 ):
     monkeypatch.delenv("IG_REQUIRE_EMAIL", raising=False)
     monkeypatch.setattr(job_search, "get_gmail_service", _gmail_not_set_up)
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1"), _job("id-2")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_, **__: [_job("id-1"), _job("id-2")])
 
     job_search.main(store)  # no exception
 
@@ -257,7 +257,7 @@ def test_main_returns_a_summary_of_the_run(store, gmail, monkeypatch):
     monkeypatch.delenv("IG_REQUIRE_EMAIL", raising=False)
     store.save_matches([_job("id-1")], new_ids={"id-1"})
     store.mark_emailed(["id-1"], "earlier")
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1"), _job("id-2")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_, **__: [_job("id-1"), _job("id-2")])
 
     assert job_search.main(store) == job_search.RunSummary(
         total_matches=2, new_matches=1, emailed_matches=1, email_sent=True, gmail_message_id="msg-1"
@@ -268,7 +268,7 @@ def test_main_returns_a_summary_of_the_run(store, gmail, monkeypatch):
     )
 
     monkeypatch.setattr(job_search, "get_gmail_service", _gmail_not_set_up)
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-3")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_, **__: [_job("id-3")])
     summary = job_search.main(store)
     assert (summary.total_matches, summary.new_matches, summary.email_sent) == (1, 1, False)
     assert summary.emailed_matches == 0
@@ -281,7 +281,7 @@ def test_main_without_a_recipient_prints_an_error(store, gmail, monkeypatch, cap
     monkeypatch.setattr(
         job_search, "get_gmail_service", lambda: pytest.fail("shouldn't sign in to Gmail")
     )
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_, **__: [_job("id-1")])
 
     job_search.main(store)
 
@@ -293,7 +293,7 @@ def test_main_without_a_recipient_prints_an_error(store, gmail, monkeypatch, cap
 def test_main_fails_when_email_is_required_but_not_set_up(store, gmail, monkeypatch):
     monkeypatch.setenv("IG_REQUIRE_EMAIL", "true")  # as on Render
     monkeypatch.setattr(job_search, "get_gmail_service", _gmail_not_set_up)
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_, **__: [_job("id-1")])
 
     with pytest.raises(job_search.GmailNotConfiguredError):
         job_search.main(store)
@@ -307,7 +307,7 @@ def test_main_still_raises_when_gmail_is_set_up_but_fails(store, gmail, monkeypa
         raise RuntimeError("token has been expired or revoked")
 
     monkeypatch.setattr(job_search, "get_gmail_service", expired_token)
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *_: [_job("id-1")])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *_, **__: [_job("id-1")])
 
     with pytest.raises(RuntimeError, match="expired or revoked"):
         job_search.main(store)

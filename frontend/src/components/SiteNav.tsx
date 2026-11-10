@@ -1,6 +1,6 @@
 "use client";
 
-import { HomeIcon, ListChecksIcon } from "lucide-react";
+import { HomeIcon, ListChecksIcon, TagsIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 const LINKS = [
   { href: "/", label: "Home", icon: HomeIcon },
   { href: "/jobs", label: "Jobs", icon: ListChecksIcon },
+  { href: "/skills", label: "Skills", icon: TagsIcon },
 ] as const;
 
 /** The header's page links; the current page is highlighted. */
@@ -28,7 +29,8 @@ export function SiteNav() {
             )}
           >
             <Icon className="size-4" />
-            {label}
+            {/* Icons only on the narrowest phones; the label stays for screen readers. */}
+            <span className="max-[359px]:sr-only">{label}</span>
           </Link>
         );
       })}

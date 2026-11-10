@@ -527,3 +527,97 @@ def test_jobs_need_the_token_when_configured(with_token, jobs_client, job_store,
         **({"json": {"status": "skipped"}} if method == "patch" else {}),
     )
     assert ok.status_code == 200
+
+
+# --- Reassessing saved jobs against your skills ------------------------------------------
+
+
+REASSESSED = job_search.ReassessSummary(
+    total_jobs=3, reassessed=2, changed=1, no_longer_match=1, fetched=2, unavailable=1, skills_source="saved"
+)
+
+
+def test_reassess_rescores_saved_jobs_and_returns_the_summary(job_store):
+    calls = []
+
+    def fake_reassess(store, fetch):
+        calls.append((store, fetch))
+        return REASSESSED
+
+    client = TestClient(api.create_app(
+        api.RunManager(FakeSearch()), store_factory=lambda: job_store, reassess=fake_reassess
+    ))
+
+    response = client.post("/jobs/reassess")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total_jobs": 3, "reassessed": 2, "changed": 1, "no_longer_match": 1,
+        "fetched": 2, "unavailable": 1, "skills_source": "saved",
+    }
+    assert calls == [(job_store, True)]
+    client.post("/jobs/reassess?fetch=false")
+    assert calls[-1] == (job_store, False)
+
+
+def test_reassess_really_rescores_with_the_saved_skills(job_store):
+    """End to end through the real job_search.reassess_saved_jobs."""
+    from search_skills import SearchSkills
+
+    job_store.save_descriptions({"ig-react": "React and TypeScript.", "acn-python": "Python and AWS."})
+    job_store.save_search_skills(SearchSkills(("React", "TypeScript", "Go"), ("React",)))
+    client = TestClient(api.create_app(api.RunManager(FakeSearch()), store_factory=lambda: job_store))
+
+    body = client.post("/jobs/reassess?fetch=false").json()
+
+    assert body["reassessed"] == 2 and body["no_longer_match"] == 1
+    react = client.get("/jobs/ig-react").json()["job"]
+    python = client.get("/jobs/acn-python").json()["job"]
+    assert (react["matches_skills"], react["skills_mismatch_reason"]) == (True, None)
+    assert python["matches_skills"] is False
+    assert python["skills_mismatch_reason"] == "it doesn't mention any of your skills"
+    assert python["status"] == "applied"  # your status is left alone
+    # Not reassessed yet (no description): null.
+    assert client.get("/jobs/acn-java").json()["job"]["matches_skills"] is None
+
+
+def test_reassess_waits_for_a_running_search(job_store):
+    search = FakeSearch(block=True)
+    manager = api.RunManager(search)
+    client = TestClient(api.create_app(manager, store_factory=lambda: job_store, reassess=lambda s, f: REASSESSED))
+    run = client.post("/runs").json()["run"]
+    assert search.started.wait(5)
+
+    response = client.post("/jobs/reassess")
+
+    assert response.status_code == 409
+    assert "A search is already running" in response.json()["error"]
+    assert "reassesses saved jobs when it finishes" in response.json()["error"]
+    assert response.json()["run"]["id"] == run["id"]
+    search.release.set()
+    wait_for(manager, run["id"])
+    assert client.post("/jobs/reassess").status_code == 200
+
+
+def test_a_search_waits_for_a_reassessment(job_store):
+    started, release = threading.Event(), threading.Event()
+
+    def slow_reassess(store, fetch):
+        started.set()
+        assert release.wait(5)
+        return REASSESSED
+
+    manager = api.RunManager(FakeSearch())
+    client = TestClient(api.create_app(manager, store_factory=lambda: job_store, reassess=slow_reassess))
+    worker = threading.Thread(target=lambda: client.post("/jobs/reassess"))
+    worker.start()
+    assert started.wait(5)
+
+    run = client.post("/runs")
+    again = client.post("/jobs/reassess")
+
+    assert run.status_code == 409 and "being reassessed" in run.json()["error"]
+    assert again.status_code == 409 and "being reassessed" in again.json()["error"]
+    release.set()
+    worker.join(5)
+    assert client.post("/runs").status_code == 202

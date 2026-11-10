@@ -17,6 +17,12 @@ class FakeTimestamp {
 
 type Doc = Record<string, unknown>;
 
+/** The real SDK stores Dates as Timestamps. */
+const encode = (fields: Doc): Doc =>
+  Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [key, value instanceof Date ? FakeTimestamp.fromDate(value) : value]),
+  );
+
 class FakeFirestore {
   constructor(public collections: Record<string, Record<string, Doc>> = {}) {}
 
@@ -33,11 +39,14 @@ class FakeFirestore {
         get: async () => snapshot(id),
         update: async (fields: Doc) => {
           if (!(id in docs)) throw new Error("NOT_FOUND: no document to update");
-          // The real SDK stores Dates as Timestamps.
-          const encoded = Object.fromEntries(
-            Object.entries(fields).map(([key, value]) => [key, value instanceof Date ? FakeTimestamp.fromDate(value) : value]),
-          );
+          const encoded = encode(fields);
           docs[id] = { ...docs[id], ...encoded };
+        },
+        set: async (fields: Doc) => {
+          docs[id] = encode(fields);
+        },
+        delete: async () => {
+          delete docs[id];
         },
       }),
     };
@@ -52,7 +61,7 @@ function config(overrides: Partial<FirestoreStoreConfig> = {}): FirestoreStoreCo
     serviceAccount: undefined,
     credentialsPath: "/keys/sa.json",
     emulatorHost: undefined,
-    collections: { jobs: "jobs", runs: "runs" },
+    collections: { jobs: "jobs", runs: "runs", settings: "settings" },
     ...overrides,
   };
 }
@@ -110,7 +119,7 @@ describe("FirestoreJobStore", () => {
   it("reads from a custom collection name", async () => {
     const FirestoreJobStore = await load();
     const db = new FakeFirestore({ ig_jobs: { x: { job_id: "x", title: "Custom", status: "emailed" } } });
-    const store = new FirestoreJobStore(db, config({ collections: { jobs: "ig_jobs", runs: "runs" } }));
+    const store = new FirestoreJobStore(db, config({ collections: { jobs: "ig_jobs", runs: "runs", settings: "settings" } }));
     expect((await store.listJobs()).map((job) => job.title)).toEqual(["Custom"]);
   });
 
@@ -140,6 +149,46 @@ describe("FirestoreJobStore", () => {
     await expect(new FirestoreJobStore(seededDb(), config()).updateJob("missing", { notes: "x" })).rejects.toThrow(
       JobNotFoundError,
     );
+  });
+  describe("skill list", () => {
+    const skills = { skills: ["Python", "Go", "SQL"], core_skills: ["Python", "Go"], proficiency: { Python: 5, Go: 3, SQL: 1 } };
+
+    it("is null until one is saved", async () => {
+      const FirestoreJobStore = await load();
+      expect(await new FirestoreJobStore(seededDb(), config()).getSearchSkills()).toBeNull();
+    });
+
+    it("saves the whole list to settings/search_skills with a Timestamp, replacing the old one", async () => {
+      const FirestoreJobStore = await load();
+      const db = seededDb();
+      const store = new FirestoreJobStore(db, config());
+      await store.saveSearchSkills({ skills: ["Old"], core_skills: ["Old"], proficiency: { Old: 3 } });
+      await store.saveSearchSkills(skills, new Date("2026-11-08T22:00:00Z"));
+
+      const doc = db.collections.settings.search_skills;
+      expect(doc).toMatchObject(skills);
+      expect(doc.updated_at).toBeInstanceOf(FakeTimestamp);
+      expect(await store.getSearchSkills()).toEqual(doc);
+      expect(Object.keys(db.collections.jobs)).toEqual(["new", "old"]); // jobs untouched
+    });
+
+    it("uses the configured settings collection", async () => {
+      const FirestoreJobStore = await load();
+      const db = seededDb();
+      const store = new FirestoreJobStore(db, config({ collections: { jobs: "jobs", runs: "runs", settings: "ig_settings" } }));
+      await store.saveSearchSkills(skills);
+      expect(Object.keys(db.collections.ig_settings)).toEqual(["search_skills"]);
+    });
+
+    it("resets by deleting the document (and doesn't mind when there is none)", async () => {
+      const FirestoreJobStore = await load();
+      const db = seededDb();
+      const store = new FirestoreJobStore(db, config());
+      await store.resetSearchSkills();
+      await store.saveSearchSkills(skills);
+      await store.resetSearchSkills();
+      expect(await store.getSearchSkills()).toBeNull();
+    });
   });
 });
 

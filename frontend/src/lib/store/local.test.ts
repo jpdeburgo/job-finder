@@ -12,7 +12,7 @@ let dir: string;
 let dbPath: string;
 
 function config(overrides: Partial<LocalStoreConfig> = {}): LocalStoreConfig {
-  return { backend: "local", path: dbPath, collections: { jobs: "jobs", runs: "runs" }, ...overrides };
+  return { backend: "local", path: dbPath, collections: { jobs: "jobs", runs: "runs", settings: "settings" }, ...overrides };
 }
 
 function readDb() {
@@ -105,7 +105,7 @@ describe("LocalJsonJobStore", () => {
 
   it("honours a custom jobs collection name", async () => {
     fs.writeFileSync(dbPath, JSON.stringify({ ig_jobs: { x: { job_id: "x", title: "Custom", status: "emailed" } } }));
-    const store = new LocalJsonJobStore(config({ collections: { jobs: "ig_jobs", runs: "runs" } }));
+    const store = new LocalJsonJobStore(config({ collections: { jobs: "ig_jobs", runs: "runs", settings: "settings" } }));
     expect((await store.listJobs()).map((job) => job.title)).toEqual(["Custom"]);
   });
 
@@ -157,6 +157,56 @@ describe("LocalJsonJobStore", () => {
     it("leaves no temporary files behind", async () => {
       await new LocalJsonJobStore(config()).updateJob(id, { notes: "x" });
       expect(fs.readdirSync(dir)).toEqual(["local_firestore.json"]);
+    });
+  });
+
+  describe("skill list", () => {
+    const skills = { skills: ["Python", "Go", "SQL"], core_skills: ["Python", "Go"], proficiency: { Python: 5, Go: 3, SQL: 1 } };
+
+    it("is null until one is saved", async () => {
+      expect(await new LocalJsonJobStore(config()).getSearchSkills()).toBeNull();
+    });
+
+    it("saves settings/search_skills like the Python store, leaving the jobs alone", async () => {
+      const before = readDb();
+      const store = new LocalJsonJobStore(config());
+      await store.saveSearchSkills(skills, new Date("2026-11-08T22:00:00.000Z"));
+
+      const after = readDb();
+      expect(after.settings).toEqual({
+        search_skills: { ...skills, updated_at: "2026-11-08T22:00:00.000+00:00" },
+      });
+      expect(after.jobs).toEqual(before.jobs);
+      expect(await store.getSearchSkills()).toEqual(after.settings.search_skills);
+      const text = fs.readFileSync(dbPath, "utf-8");
+      expect(text).toBe(serializeDatabase(JSON.parse(text)));
+    });
+
+    it("replaces the whole list on every save", async () => {
+      const store = new LocalJsonJobStore(config());
+      await store.saveSearchSkills({ skills: ["Old", "Older"], core_skills: ["Old"], proficiency: { Old: 3, Older: 3 } });
+      await store.saveSearchSkills(skills);
+      expect(await store.getSearchSkills()).toMatchObject(skills);
+    });
+
+    it("resets by removing the document, and the collection once it's empty", async () => {
+      const store = new LocalJsonJobStore(config());
+      const before = fs.readFileSync(dbPath, "utf-8");
+      await store.resetSearchSkills(); // nothing saved: the file isn't rewritten
+      expect(fs.readFileSync(dbPath, "utf-8")).toBe(before);
+
+      await store.saveSearchSkills(skills);
+      await store.resetSearchSkills();
+      expect(await store.getSearchSkills()).toBeNull();
+      expect(readDb()).not.toHaveProperty("settings");
+    });
+
+    it("works before the file exists", async () => {
+      fs.rmSync(dbPath);
+      const store = new LocalJsonJobStore(config());
+      expect(await store.getSearchSkills()).toBeNull();
+      await store.saveSearchSkills(skills);
+      expect(Object.keys(readDb())).toEqual(["settings"]);
     });
   });
 });

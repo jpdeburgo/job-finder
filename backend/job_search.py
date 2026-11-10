@@ -34,6 +34,7 @@ from job_sites import (
 from job_boards import ACCENTURE_SEARCH_URL, INSIGHT_GLOBAL_URL, JOB_SEARCH_URLS
 from job_fit import CandidateProfile, FitScore, fit_label, score_fit
 from job_store import FirestoreJobStore, get_job_store
+from search_skills import InvalidSkillsError, SearchSkills, skills_from_document
 
 load_dotenv()
 
@@ -45,6 +46,10 @@ SEARCH_TITLES = [
     "Frontend Developer",
     "React Developer",
 ]
+# The skills a Core match is scored on. These are the defaults: the
+# dashboard's Skills page saves your own list to the database, and every
+# search uses that instead when there is one (see search_skills.py).
+# frontend/src/lib/skills.ts mirrors both lists, to show them before you save.
 RESUME_SKILLS = [
     "Python",
     "JavaScript",
@@ -351,38 +356,52 @@ class SearchTrack:
     growth_track: bool = False
     # When set, at least one of these must be among the matched skills.
     required_skills: tuple[str, ...] = ()
+    # Who the fit score compares jobs against, and which title tech counts as
+    # off your resume. None: the defaults at the top of this file.
+    profile: CandidateProfile | None = None
 
 
-TRACKS = (
-    SearchTrack(
-        "Core matches (your main stack)",
-        tuple(SEARCH_TITLES + EXTRA_SEARCH_TERMS),
-        tuple(RESUME_SKILLS),
-        MIN_SKILL_MATCHES,
-        required_skills=tuple(CORE_LANGUAGE_SKILLS),
-    ),
-    SearchTrack(
-        "Java growth track (entry-level / lower bar)",
-        tuple(JAVA_SEARCH_TERMS),
-        ("Java",),
-        1,
-        growth_track=True,
-    ),
-    SearchTrack(
-        "iOS growth track (entry-level / lower bar)",
-        tuple(IOS_SEARCH_TERMS),
-        ("iOS",),
-        1,
-        growth_track=True,
-    ),
-    SearchTrack(
-        ".NET growth track (entry-level / lower bar)",
-        tuple(DOTNET_SEARCH_TERMS),
-        (".NET",),
-        1,
-        growth_track=True,
-    ),
-)
+def default_search_skills() -> SearchSkills:
+    """The skills at the top of this file, used until you save your own."""
+    return SearchSkills(tuple(RESUME_SKILLS), tuple(CORE_LANGUAGE_SKILLS))
+
+
+def build_tracks(skills: SearchSkills | None = None) -> tuple[SearchTrack, ...]:
+    """The tracks to search, with the Core track scored on ``skills`` (your
+    saved list; the defaults at the top of this file when None)."""
+    skills = skills or default_search_skills()
+    profile = candidate_profile(skills)
+    tracks = (
+        SearchTrack(
+            "Core matches (your main stack)",
+            tuple(SEARCH_TITLES + EXTRA_SEARCH_TERMS),
+            skills.skills,
+            MIN_SKILL_MATCHES,
+            required_skills=skills.core_skills,
+        ),
+        SearchTrack(
+            "Java growth track (entry-level / lower bar)",
+            tuple(JAVA_SEARCH_TERMS),
+            ("Java",),
+            1,
+            growth_track=True,
+        ),
+        SearchTrack(
+            "iOS growth track (entry-level / lower bar)",
+            tuple(IOS_SEARCH_TERMS),
+            ("iOS",),
+            1,
+            growth_track=True,
+        ),
+        SearchTrack(
+            ".NET growth track (entry-level / lower bar)",
+            tuple(DOTNET_SEARCH_TERMS),
+            (".NET",),
+            1,
+            growth_track=True,
+        ),
+    )
+    return tuple(dataclasses.replace(track, profile=profile) for track in tracks)
 
 
 @dataclass
@@ -409,6 +428,9 @@ class JobMatch:
     # ...}; they add up to it), and the same in words.
     fit_breakdown: dict[str, int] = field(default_factory=dict)
     fit_reasons: list[str] = field(default_factory=list)
+    # The posting's text. Saved apart from the job (job_descriptions), so it
+    # can be re-scored when you change your skills (reassess_saved_jobs).
+    description: str = field(default="", repr=False)
 
     @property
     def score(self) -> int:
@@ -455,9 +477,17 @@ def _is_international_title(title: str) -> bool:
     return INTERNATIONAL_TITLE_PATTERN.search(title) is not None
 
 
-def _has_unfamiliar_title_tech(title: str) -> bool:
+def unfamiliar_tech(skills: SearchSkills | None = None) -> tuple[str, ...]:
+    """``NON_RESUME_TITLE_TECH`` minus anything in ``skills``: add "Kotlin" to
+    your skills and Kotlin titles are no longer dropped or marked down."""
+    mine = {skill.lower() for skill in (skills or default_search_skills()).skills}
+    return tuple(tech for tech in NON_RESUME_TITLE_TECH if tech.lower() not in mine)
+
+
+def _has_unfamiliar_title_tech(title: str, unfamiliar: tuple[str, ...] | None = None) -> bool:
     """Return True when the title names a stack that isn't on the resume."""
-    return any(_contains_skill(title, tech) for tech in NON_RESUME_TITLE_TECH)
+    techs = NON_RESUME_TITLE_TECH if unfamiliar is None else unfamiliar
+    return any(_contains_skill(title, tech) for tech in techs)
 
 
 def _is_senior_title(title: str) -> bool:
@@ -504,17 +534,48 @@ def _is_outside_job_country(posting: Posting) -> bool:
     return mentions(NON_US_LOCATION_WORDS) and not mentions(US_LOCATION_WORDS)
 
 
-def candidate_profile() -> CandidateProfile:
-    """Your profile for the fit score, from the settings at the top of this file."""
+def candidate_profile(skills: SearchSkills | None = None) -> CandidateProfile:
+    """Your profile for the fit score, from the settings at the top of this
+    file and ``skills`` (your saved skill list; the defaults when None)."""
+    skills = skills or default_search_skills()
     return CandidateProfile(
-        skills=tuple(RESUME_SKILLS),
-        core_skills=tuple(CORE_LANGUAGE_SKILLS),
+        skills=skills.skills,
+        core_skills=skills.core_skills,
         years_experience=YEARS_OF_EXPERIENCE,
         target_roles=tuple(TARGET_ROLE_TITLES),
         generic_roles=tuple(GENERIC_ROLE_TITLES),
-        unfamiliar_tech=tuple(NON_RESUME_TITLE_TECH),
+        unfamiliar_tech=unfamiliar_tech(skills),
         skill_aliases=tuple(tuple(group) for group in SKILL_ALIASES),
+        proficiency=skills.proficiency,
     )
+
+
+# The tracks with the default skills. Each run builds its own from the skills
+# saved in the dashboard (see search_skills_for_run).
+TRACKS = build_tracks()
+
+
+def saved_search_skills(store: FirestoreJobStore) -> SearchSkills | None:
+    """The skills saved in the dashboard, or None if there are none (or they
+    can't be used, with a warning)."""
+    try:
+        return skills_from_document(store.load_search_skills())
+    except InvalidSkillsError as error:
+        print(f"WARNING: the saved skill list can't be used ({error}); "
+              "using the defaults in job_search.py instead.")
+        return None
+
+
+def search_skills_for_run(store: FirestoreJobStore) -> SearchSkills:
+    """The skills saved in the dashboard, or the defaults at the top of this
+    file if there are none (or they can't be used)."""
+    saved = saved_search_skills(store)
+    skills = saved or default_search_skills()
+    source = "saved in the dashboard" if saved else "defaults in job_search.py"
+    core = set(skills.core_skills)
+    listed = ", ".join(f"{skill}*" if skill in core else skill for skill in skills.skills)
+    print(f"Skills ({source}; * = core): {listed}")
+    return skills
 
 
 def _parse_posted_date(value: Any) -> datetime | None:
@@ -745,7 +806,7 @@ def _passes_listing_filters(
         return False
     if _is_placeholder_listing(title):
         return False
-    if _has_unfamiliar_title_tech(title):
+    if _has_unfamiliar_title_tech(title, track.profile.unfamiliar_tech if track.profile else None):
         return False
     if _title_names_growth_stack(title) and not track.growth_track:
         return False
@@ -780,7 +841,7 @@ def evaluate_posting(posting: Posting, site: JobSite, track: SearchTrack) -> Job
     ):
         return None
 
-    fit: FitScore = score_fit(posting, candidate_profile(), min_years)
+    fit: FitScore = score_fit(posting, track.profile or candidate_profile(), min_years)
     return JobMatch(
         job_id=posting.job_id,
         title=posting.title,
@@ -799,6 +860,7 @@ def evaluate_posting(posting: Posting, site: JobSite, track: SearchTrack) -> Job
         fit_score=fit.score,
         fit_breakdown=dict(fit.breakdown),
         fit_reasons=list(fit.reasons),
+        description=posting.description or "",
     )
 
 
@@ -948,9 +1010,11 @@ def search_term(
     return search_site(session, site, [(track, term)], descriptions).matches
 
 
-def _search_site_in_own_session(site: JobSite) -> SiteSearchResult:
+def _search_site_in_own_session(
+    site: JobSite, tracks: tuple[SearchTrack, ...] = TRACKS
+) -> SiteSearchResult:
     started = time.monotonic()
-    searches = [(track, term) for track in TRACKS for term in track.terms]
+    searches = [(track, term) for track in tracks for term in track.terms]
     log(f"Searching {site.name} ({site.kind}) for {len(searches)} term(s) ...")
     with build_session() as session:
         result = search_site(session, site, searches)
@@ -966,12 +1030,16 @@ def run_all_searches(
     include_unmarked: bool = False,
     onsite: dict[str, str] | None = None,
     checked: set[str] | None = None,
+    tracks: tuple[SearchTrack, ...] | None = None,
 ) -> list[JobMatch]:
     """Search every site (or those ``site_selectors`` pick) at the same time.
 
     ``onsite``, if given, is filled with the jobs whose posting says on-site or
-    hybrid although the site didn't mark them so (job ID -> why).
+    hybrid although the site didn't mark them so (job ID -> why). ``tracks``
+    defaults to ``TRACKS`` (the default skills); ``main`` passes the tracks
+    for the skills saved in the dashboard.
     """
+    tracks = tracks or TRACKS
     with build_session() as session:
         sites = resolve_sites(
             session, selectors=site_selectors, include_unmarked=include_unmarked
@@ -983,7 +1051,9 @@ def run_all_searches(
     failed_searches: list[str] = []
     total_searches = 0
     with ThreadPoolExecutor(max_workers=len(sites)) as pool:
-        futures = [(site, pool.submit(_search_site_in_own_session, site)) for site in sites]
+        futures = [
+            (site, pool.submit(_search_site_in_own_session, site, tracks)) for site in sites
+        ]
         for site, future in futures:
             result = future.result()
             total_searches += result.searches
@@ -1002,7 +1072,7 @@ def run_all_searches(
     if failed_searches:
         print(f"WARNING: {len(failed_searches)} search(es) failed: {failed_searches}")
 
-    track_order = {track.name: index for index, track in enumerate(TRACKS)}
+    track_order = {track.name: index for index, track in enumerate(tracks)}
 
     def sort_key(job: JobMatch) -> tuple[int, int, str]:
         order = track_order[job.track]
@@ -1171,7 +1241,8 @@ def main(
     unemailed_ids = store.load_unemailed_ids()
     onsite: dict[str, str] = {}
     checked: set[str] = set()
-    all_matches = run_all_searches(site_selectors, include_unmarked, onsite, checked)
+    tracks = build_tracks(search_skills_for_run(store))
+    all_matches = run_all_searches(site_selectors, include_unmarked, onsite, checked, tracks=tracks)
 
     brand_new = [job for job in all_matches if job.job_id not in seen_ids]
     # Re-send anything a previous run saved but failed to email.
@@ -1192,6 +1263,9 @@ def main(
     correct_saved_remote_flags(store, onsite)
     if RECHECK_SAVED_JOBS:
         recheck_saved_jobs(store, skip=checked | set(onsite), selectors=site_selectors)
+    # Re-score the saved jobs this run didn't match, in case your skills
+    # changed. Only descriptions already saved are used (no site requests).
+    reassess_saved_jobs(store, fetch_missing=False)
 
     message_id: str | None = None
     if to_email:
@@ -1295,6 +1369,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="without searching or emailing, re-check every saved job marked remote "
         "against its posting, mark the on-site/hybrid ones not remote, and write "
         "each job's verdict to remote_check_report.txt (with --site, only those sites)",
+    )
+    parser.add_argument(
+        "--reassess",
+        action="store_true",
+        help="without searching or emailing, re-score every saved job against your "
+        "current skills (the dashboard's Skills page): matched skills, fit score, and "
+        "whether it still matches. Descriptions not saved yet are loaded from the job sites once.",
     )
     parser.add_argument(
         "--list-sites",
@@ -1466,6 +1547,7 @@ def recheck_saved_jobs(
             MAX_CONCURRENT_REQUESTS_PER_SITE,
         )
     fixes: dict[str, str] = {}
+    texts: dict[str, str] = {}
     unavailable = 0
     sections: list[str] = []
     for (doc_id, data, site), result, error in results:
@@ -1475,18 +1557,203 @@ def recheck_saved_jobs(
                             f"(it may be closed): {error or result}")
             continue
         posting, payload = result
+        if posting.description:
+            texts[doc_id] = posting.description  # for reassessing it against your skills
         checked, lines = explain_posting(site, _fill_from_search(site, posting, data), payload)
         if checked.is_remote is False:
             fixes[doc_id] = _describe_evidence(checked.remote_note or "the site marks it hybrid or on-site")
             print(f"  {site.name}: {data.get('title')!r} ({doc_id}) isn't remote: {fixes[doc_id]}.")
         sections.append(f"=== {doc_id}\n" + "\n".join(lines))
     store.mark_not_remote(fixes)
+    store.save_descriptions(texts)
     print(f"Re-checked {len(targets)} saved job(s): {len(fixes)} marked not remote"
           + (f", {unavailable} couldn't be loaded (closed postings?)" if unavailable else "") + ".")
     if report is not None:
         report.write_text("\n\n".join(sections) + "\n")
         print(f"Every re-checked job's verdict, fields, and description lines: {report}")
     return len(fixes)
+
+
+# --- Reassessing saved jobs against your skills -------------------------------------
+
+# The fields a reassessment rewrites; everything else about a job (status,
+# notes, remote status, ...) is left alone.
+REASSESSED_FIELDS = (
+    "matched_skills", "score", "fit_score", "fit_breakdown", "fit_reasons",
+    "matches_skills", "skills_mismatch_reason",
+)
+
+
+@dataclass
+class ReassessSummary:
+    """What ``reassess_saved_jobs`` did; the API returns it to the dashboard."""
+
+    # Every saved job, and how many of them were re-scored.
+    total_jobs: int
+    reassessed: int
+    # Re-scored jobs whose skills, fit score, or match changed (only these are written).
+    changed: int
+    # Re-scored jobs that wouldn't match your skills now (flagged, never deleted).
+    no_longer_match: int
+    # Descriptions loaded from the job sites this time (saved for next time).
+    fetched: int
+    # Jobs left as they were because their description couldn't be loaded
+    # (closed postings, or a site that's no longer in JOB_SEARCH_URLS).
+    unavailable: int
+    # "saved": your list from the dashboard; "default": the lists in this file.
+    skills_source: str
+
+
+def skills_mismatch(posting: Posting, track: SearchTrack, matched: list[str]) -> str | None:
+    """Why a saved job wouldn't be a match on ``track`` any more, or None if
+    it still is. Only the checks your skills affect; the rest (remote, age,
+    location, ...) were settled when the search found it. Reads after "No
+    longer matches your skills: ..."."""
+    unfamiliar = track.profile.unfamiliar_tech if track.profile else NON_RESUME_TITLE_TECH
+    named = [tech for tech in unfamiliar if _contains_skill(posting.title, tech)]
+    if named:
+        return f"its title names {named[0]}, which isn't one of your skills"
+    if len(matched) < track.minimum_matches:
+        if not matched:
+            return "it doesn't mention any of your skills"
+        return (f"it mentions only {', '.join(matched)}; a match needs "
+                f"{track.minimum_matches} of your skills")
+    if track.required_skills and not set(track.required_skills) & set(matched):
+        return f"it mentions {', '.join(matched)}, but none of your core skills"
+    return None
+
+
+def assess_saved_job(
+    data: dict[str, Any], description: str, tracks: tuple[SearchTrack, ...]
+) -> dict[str, Any]:
+    """Re-score one saved job (its stored fields plus its description) on the
+    track it was found on: its matched skills, fit score, and whether it
+    still matches. Returns the ``REASSESSED_FIELDS``."""
+    track = next((t for t in tracks if t.name == data.get("track")), tracks[0])
+    posting = Posting(
+        job_id=str(data.get("job_id") or ""),
+        title=str(data.get("title") or ""),
+        url=str(data.get("url") or ""),
+        company=str(data.get("company") or ""),
+        # What the search decided (the fit score's remote part); your own
+        # work_arrangement doesn't change the score, like in the search.
+        is_remote=data.get("is_remote") if isinstance(data.get("is_remote"), bool) else None,
+        description=description,
+    )
+    matched = score_posting(posting, track.skills)
+    fit = score_fit(posting, track.profile or candidate_profile(), extract_min_years(posting))
+    reason = skills_mismatch(posting, track, matched)
+    return {
+        "matched_skills": matched,
+        "score": len(matched),
+        "fit_score": fit.score,
+        "fit_breakdown": dict(fit.breakdown),
+        "fit_reasons": list(fit.reasons),
+        "matches_skills": reason is None,
+        "skills_mismatch_reason": reason,
+    }
+
+
+def fetch_missing_descriptions(
+    jobs: list[tuple[str, dict[str, Any]]], selectors: list[str] | None = None
+) -> tuple[dict[str, str], int]:
+    """Load the descriptions of saved jobs from their sites. Returns
+    ``(texts by job ID, how many couldn't be loaded)``."""
+    if not jobs:
+        return {}, 0
+    with build_session() as session:
+        sites = resolve_sites(session, selectors=selectors)
+        targets = []
+        unavailable = 0
+        for doc_id, data in jobs:
+            site = next((s for s in sites if doc_id.startswith(s.id_prefix)), None)
+            if site is None or not data.get("url"):
+                unavailable += 1
+                continue
+            targets.append((doc_id, data, site))
+        print(f"Loading {len(targets)} saved job description(s) from the job sites (once; "
+              "they're kept for next time) ...")
+
+        def load(doc_id: str, data: dict[str, Any], site: JobSite) -> str:
+            try:
+                return site.fetch_description(
+                    session, str(data["url"]), doc_id[len(site.id_prefix):], str(data.get("title") or "")
+                )
+            except requests.RequestException:
+                raise  # counted by _run_parallel
+            except Exception as error:  # noqa: BLE001 - one odd posting mustn't stop the rest
+                log(f"  {site.name}: couldn't read {doc_id}'s description: {type(error).__name__}: {error}")
+                return ""
+
+        # Sites are loaded side by side; HOST_THROTTLE still spaces out the
+        # requests to each host.
+        results = _run_parallel(
+            [(doc_id, lambda d=doc_id, v=data, s=site: load(d, v, s)) for doc_id, data, site in targets],
+            MAX_CONCURRENT_REQUESTS_PER_SITE * max(1, len({id(s) for _, _, s in targets})),
+        )
+    texts = {doc_id: text for doc_id, text, error in results if error is None and text and text.strip()}
+    return texts, unavailable + len(targets) - len(texts)
+
+
+def reassess_saved_jobs(
+    store: FirestoreJobStore,
+    fetch_missing: bool = True,
+    selectors: list[str] | None = None,
+) -> ReassessSummary:
+    """Re-score every saved job against your current skills.
+
+    Each job's matched skills and fit score are worked out again from its
+    saved description, on the track it was found on. Jobs that wouldn't match
+    now are flagged (``matches_skills`` false, with ``skills_mismatch_reason``),
+    never deleted; their status and notes are left alone. Jobs saved before
+    descriptions were kept have theirs loaded from the job site first
+    (``fetch_missing``; once, they're saved for next time). Only jobs whose
+    fields change are written.
+    """
+    saved = saved_search_skills(store)
+    tracks = build_tracks(saved)
+    jobs = store.list_job_documents()
+    texts = store.load_descriptions()
+
+    fetched: dict[str, str] = {}
+    missing = [(doc_id, data) for doc_id, data in jobs if doc_id not in texts]
+    unavailable = len(missing)
+    if missing and fetch_missing:
+        fetched, unavailable = fetch_missing_descriptions(missing, selectors)
+        store.save_descriptions(fetched)
+        texts.update(fetched)
+
+    changes: dict[str, dict[str, Any]] = {}
+    reassessed = no_longer_match = 0
+    for doc_id, data in jobs:
+        if doc_id not in texts:
+            continue
+        fields = assess_saved_job(data, texts[doc_id], tracks)
+        reassessed += 1
+        no_longer_match += not fields["matches_skills"]
+        if any(data.get(key) != value for key, value in fields.items()):
+            changes[doc_id] = fields
+    store.update_jobs(changes)
+
+    summary = ReassessSummary(
+        total_jobs=len(jobs),
+        reassessed=reassessed,
+        changed=len(changes),
+        no_longer_match=no_longer_match,
+        fetched=len(fetched),
+        unavailable=unavailable,
+        skills_source="saved" if saved else "default",
+    )
+    if not unavailable:
+        left_out = ""
+    elif fetch_missing:
+        left_out = f"; {unavailable} left as they were (couldn't load the posting: closed?)"
+    else:
+        left_out = (f"; {unavailable} left as they were (no saved description yet: "
+                    "`job_search.py --reassess` or the dashboard's Refresh loads them)")
+    print(f"Reassessed {reassessed} saved job(s) against your skills: {len(changes)} changed, "
+          f"{no_longer_match} no longer match{left_out}.")
+    return summary
 
 
 def list_sites() -> None:
@@ -1507,6 +1774,10 @@ def cli(argv: list[str] | None = None) -> int:
     if args.check_remote:
         store = FirestoreJobStore.local() if args.local else None
         return check_remote(args.check_remote, store)
+    if args.reassess:
+        store = FirestoreJobStore.local() if args.local else get_job_store()
+        reassess_saved_jobs(store)
+        return 0
     if args.recheck_saved:
         store = FirestoreJobStore.local() if args.local else get_job_store()
         try:

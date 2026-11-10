@@ -540,6 +540,14 @@ class JobSite:
         """
         raise UnsupportedSiteError(f"Can't look up single {self.kind or self.name} jobs yet.")
 
+    def fetch_description(
+        self, session: requests.Session, url: str, native_id: str = "", title: str = ""
+    ) -> str:
+        """Just the description of one saved job, for re-scoring it against your
+        skills. Raises ``UnsupportedSiteError`` or ``requests.RequestException``
+        when it can't be loaded (say, the posting has closed)."""
+        return self.lookup(session, url, native_id, title)[0].description or ""
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.name!r}, {self.search_url!r})"
 
@@ -664,6 +672,16 @@ class InsightGlobalSite(JobSite):
 
     def fetch_details(self, session: requests.Session, posting: Posting) -> Posting:
         return self.apply_details(posting, self.details_payload(session, posting.detail_key))
+
+    def fetch_description(
+        self, session: requests.Session, url: str, native_id: str = "", title: str = ""
+    ) -> str:
+        # The details alone have the description: one request, where lookup()
+        # also searches for the job's remote flags.
+        requisition_id = native_id or urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]
+        return html_to_text(
+            self.details_payload(session, requisition_id).get("description"), keep_lines=True
+        )
 
     def find_search_record(
         self, session: requests.Session, requisition_id: str, title: str

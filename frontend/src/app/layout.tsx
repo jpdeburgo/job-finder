@@ -23,8 +23,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="flex items-center gap-2 sm:gap-4">
                 <Link href="/" className="flex items-center gap-2 whitespace-nowrap">
                   <BriefcaseBusinessIcon className="size-5" />
-                  {/* On the narrowest phones the icon alone links home, so the nav still fits. */}
-                  <span className="text-lg font-semibold tracking-tight max-[379px]:sr-only">Job Finder</span>
+                  {/* On phones the icon alone links home, so the nav still fits. */}
+                  <span className="text-lg font-semibold tracking-tight max-[459px]:sr-only">Job Finder</span>
                 </Link>
                 <SiteNav />
               </div>

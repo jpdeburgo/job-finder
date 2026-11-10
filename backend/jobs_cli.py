@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 from job_store import (
     DEFAULT_JOBS_COLLECTION,
     DEFAULT_LOCAL_DB_PATH,
+    DEFAULT_SETTINGS_COLLECTION,
     JOB_STATUSES,
     WORK_ARRANGEMENTS,
     STATUS_APPLIED,
@@ -44,6 +45,7 @@ from job_store import (
     FirestoreJobStore,
     get_job_store,
 )
+from search_skills import SEARCH_SKILLS_DOCUMENT, InvalidSkillsError, skills_from_document
 
 load_dotenv()
 
@@ -151,21 +153,42 @@ def cmd_arrangement(store: FirestoreJobStore, args: argparse.Namespace) -> int:
     return _set_arrangement(store, args.job_id, None if args.arrangement == "site" else args.arrangement)
 
 
+def _migrate_search_skills(store: FirestoreJobStore, data: dict[str, Any]) -> None:
+    """Copy the skill list saved in the dashboard, unless the store has its own."""
+    settings = data.get(DEFAULT_SETTINGS_COLLECTION)
+    document = settings.get(SEARCH_SKILLS_DOCUMENT) if isinstance(settings, dict) else None
+    if document is None:
+        return
+    if store.load_search_skills() is not None:
+        print("Kept the skill list already saved there (not copying this file's).")
+        return
+    try:
+        skills = skills_from_document(document)
+    except InvalidSkillsError as error:
+        print(f"Skipped the saved skill list: {error}.", file=sys.stderr)
+        return
+    store.save_search_skills(skills)
+    print(f"Imported your skill list ({len(skills.skills)} skills).")
+
+
 def cmd_migrate(store: FirestoreJobStore, args: argparse.Namespace) -> int:
-    """Copy the jobs in a local_firestore.json snapshot into the store."""
+    """Copy the jobs (and your saved skill list) in a local_firestore.json snapshot into the store."""
     path = Path(args.path)
     if not path.exists():
         print(f"{path} does not exist.", file=sys.stderr)
         return 1
     data = json.loads(path.read_text(encoding="utf-8"))
 
-    if isinstance(data, dict) and isinstance(data.get(DEFAULT_JOBS_COLLECTION), dict):
-        documents = data[DEFAULT_JOBS_COLLECTION]
+    has_jobs = isinstance(data, dict) and isinstance(data.get(DEFAULT_JOBS_COLLECTION), dict)
+    has_settings = isinstance(data, dict) and isinstance(data.get(DEFAULT_SETTINGS_COLLECTION), dict)
+    if has_jobs or has_settings:
+        documents = data.get(DEFAULT_JOBS_COLLECTION) or {}
         added = store.import_documents(documents)
         print(
             f"Imported {added} job document(s) from {path.name} "
             f"({len(documents) - added} already present)."
         )
+        _migrate_search_skills(store, data)
         return 0
 
     print(
@@ -228,7 +251,7 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     p.add_argument("job_id")
     p.add_argument("arrangement", choices=[*WORK_ARRANGEMENTS, "site"])
 
-    p = add("migrate", "copy a local_firestore.json file's jobs into the database", cmd_migrate)
+    p = add("migrate", "copy a local_firestore.json file's jobs and skill list into the database", cmd_migrate)
     p.add_argument("path", nargs="?", default=str(DEFAULT_LOCAL_DB_PATH))
 
     local_help = "use local_firestore.json (or IG_LOCAL_DB_PATH) instead of Firebase"

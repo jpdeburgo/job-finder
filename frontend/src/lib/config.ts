@@ -41,6 +41,7 @@ const PATH_ENV_VARS = ["GOOGLE_APPLICATION_CREDENTIALS", "GMAIL_CREDENTIALS_PATH
 
 export const DEFAULT_JOBS_COLLECTION = "jobs";
 export const DEFAULT_RUNS_COLLECTION = "runs";
+export const DEFAULT_SETTINGS_COLLECTION = "settings";
 export const LOCAL_DB_FILENAME = "local_firestore.json";
 /** Project ID used with the emulator when none is configured. */
 export const DEFAULT_EMULATOR_PROJECT_ID = "demo-job-finder";
@@ -50,6 +51,8 @@ export type Env = Record<string, string | undefined>;
 export interface CollectionNames {
   jobs: string;
   runs: string;
+  /** Where your skill list is saved (`settings/search_skills`). */
+  settings: string;
 }
 
 export interface LocalStoreConfig {
@@ -100,6 +103,7 @@ function collectionNames(env: Env): CollectionNames {
   return {
     jobs: nonEmpty(env.FIRESTORE_JOBS_COLLECTION) ?? DEFAULT_JOBS_COLLECTION,
     runs: nonEmpty(env.FIRESTORE_RUNS_COLLECTION) ?? DEFAULT_RUNS_COLLECTION,
+    settings: nonEmpty(env.FIRESTORE_SETTINGS_COLLECTION) ?? DEFAULT_SETTINGS_COLLECTION,
   };
 }
 

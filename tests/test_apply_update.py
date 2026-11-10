@@ -22,7 +22,7 @@ BASE_FILES = {
     "backend/local_firestore.json": '{"jobs": {"mine": {"status": "applied"}}}',
     "frontend/src/lib/jobs.ts": "jobs v1",
     "frontend/package.json": '{"v": 1}',
-    "alignerr.txt": "notes v1",
+    "notes.txt": "notes v1",
 }
 
 
@@ -60,7 +60,7 @@ def project(tmp_path):
     archive.build_archive(root, root / "job-finder-20261107-085423.zip")
     touch(root / "job-finder-20261107-085423.zip", 3600)
     write_tree(root, {
-        "alignerr.txt": "notes v2 (yours)",  # only you changed it
+        "notes.txt": "notes v2 (yours)",  # only you changed it
         "backend/job_sites.py": "sites (your edit)",  # the zip changes it too: conflict
         "backend/my_scratch.py": "your new file",
         "backend/.env": "IG_EMAIL_TO=me@example.com",
@@ -183,7 +183,7 @@ def test_applies_only_what_the_zip_changed(project, downloads, update_zip, capsy
     assert read(project, "backend/job_fit.py") == "new module"
     assert not (project / "backend/old_module.py").exists()
     # Your edits since sharing are kept, including the conflicting one.
-    assert read(project, "alignerr.txt") == "notes v2 (yours)"
+    assert read(project, "notes.txt") == "notes v2 (yours)"
     assert read(project, "backend/job_sites.py") == "sites (your edit)"
     assert read(project, "backend/my_scratch.py") == "your new file"
     # Never touched: data, secrets, dependencies.
@@ -205,7 +205,7 @@ def test_force_takes_the_zips_version_of_conflicts(project, downloads, update_zi
     assert run(project, downloads, "--yes", "--force") == 0
 
     assert read(project, "backend/job_sites.py") == "sites v2"
-    assert read(project, "alignerr.txt") == "notes v2 (yours)"  # still only yours
+    assert read(project, "notes.txt") == "notes v2 (yours)"  # still only yours
 
 
 def _known(project, update_zip, downloads=None):
@@ -264,7 +264,7 @@ def test_second_update_after_applying_the_first(project, downloads, update_zip, 
     assert read(project, "backend/job_search.py") == "search v3"
     assert read(project, "backend/job_fit.py") == "new module v2"
     # Your edits are still kept.
-    assert read(project, "alignerr.txt") == "notes v2 (yours)"
+    assert read(project, "notes.txt") == "notes v2 (yours)"
     assert read(project, "backend/job_sites.py") == "sites (your edit)"
     assert "update applied here" in capsys.readouterr().out
 
@@ -273,7 +273,7 @@ def test_second_update_when_the_first_was_applied_by_hand(project, downloads, up
     # No record of the first update (applied by unzipping, or with an older
     # apply_update.py), but it's still in Downloads.
     for relative, content in updated_files().items():
-        if relative not in ("backend/local_firestore.json", "backend/job_sites.py", "alignerr.txt"):
+        if relative not in ("backend/local_firestore.json", "backend/job_sites.py", "notes.txt"):
             (project / relative).parent.mkdir(parents=True, exist_ok=True)
             (project / relative).write_text(content)
     (project / "backend/old_module.py").unlink()
@@ -281,7 +281,7 @@ def test_second_update_when_the_first_was_applied_by_hand(project, downloads, up
     assert run(project, downloads, "--yes") == 0
 
     assert read(project, "backend/job_search.py") == "search v3"
-    assert read(project, "alignerr.txt") == "notes v2 (yours)"
+    assert read(project, "notes.txt") == "notes v2 (yours)"
     assert read(project, "backend/job_sites.py") == "sites (your edit)"
 
 
@@ -292,7 +292,7 @@ def test_second_update_when_the_first_was_skipped(project, downloads, update_zip
     assert read(project, "backend/job_search.py") == "search v3"
     assert read(project, "frontend/package.json") == '{"v": 2}'  # first round only
     assert not (project / "backend/old_module.py").exists()  # deleted in the first round
-    assert read(project, "alignerr.txt") == "notes v2 (yours)"
+    assert read(project, "notes.txt") == "notes v2 (yours)"
     assert read(project, "backend/job_sites.py") == "sites (your edit)"
 
 
@@ -304,7 +304,7 @@ def test_without_an_earlier_archive_every_difference_is_updated_and_nothing_dele
     assert run(project, downloads, "--yes") == 0
 
     assert read(project, "backend/job_sites.py") == "sites v2"
-    assert read(project, "alignerr.txt") == "notes v1"  # can't tell it was yours
+    assert read(project, "notes.txt") == "notes v1"  # can't tell it was yours
     assert (project / "backend/old_module.py").exists()
     assert (project / "backend/my_scratch.py").exists()
     assert "interviewing" in read(project, "backend/local_firestore.json")
@@ -321,7 +321,7 @@ def test_all_takes_every_file_from_the_zip_but_keeps_files_you_created(project, 
     for relative, content in updated_files().items():
         if relative != "backend/local_firestore.json":
             assert read(project, relative) == content, relative
-    assert read(project, "alignerr.txt") == "notes v1"
+    assert read(project, "notes.txt") == "notes v1"
     assert read(project, "backend/job_sites.py") == "sites v2"
     # What the update removed is deleted; what you created is kept.
     assert not (project / "backend/old_module.py").exists()
@@ -472,7 +472,7 @@ def test_undo_does_not_overwrite_a_deleted_file_you_put_back(project, downloads)
     assert apply_update.main(["--root", str(project), "--undo"]) == 0
 
     assert read(project, "apply_update.py") == "new script"
-    assert read(project, "alignerr.txt") == "notes v2 (yours)"  # the rest is put back
+    assert read(project, "notes.txt") == "notes v2 (yours)"  # the rest is put back
 
 
 def test_executable_bit_is_kept(project, downloads):
@@ -566,7 +566,7 @@ def test_a_changed_files_bundle_never_deletes(project, downloads, capsys):
     # Everything not in the bundle is as it was.
     assert read(project, "backend/job_search.py") == "search v1"
     assert read(project, "backend/old_module.py") == "to be deleted by the update"
-    assert read(project, "alignerr.txt") == "notes v2 (yours)"
+    assert read(project, "notes.txt") == "notes v2 (yours)"
 
 
 def test_a_changed_files_bundle_keeps_your_edits_by_default(project, downloads, capsys):
@@ -624,10 +624,10 @@ def test_possibly_yours_is_kept_with_yes_or_keep_mine_and_taken_with_force(proje
 
 
 def test_a_file_no_copy_ever_changed_is_certainly_yours(project, downloads, update_zip, capsys):
-    # alignerr.txt is "notes v1" in every copy; yours says v2: your edit, kept without asking.
+    # notes.txt is "notes v1" in every copy; yours says v2: your edit, kept without asking.
     assert run(project, downloads, "--force", "--yes") == 0
 
-    assert read(project, "alignerr.txt") == "notes v2 (yours)"
+    assert read(project, "notes.txt") == "notes v2 (yours)"
 
 
 def test_a_file_created_in_a_missing_update_is_not_certainly_yours(project, downloads):
@@ -972,7 +972,7 @@ def test_files_an_earlier_update_misplaced_are_cleaned_up(project, downloads, tm
     many = {f"backend/module_{n}.py": f"m{n}" for n in range(8)}
     write_tree(project, many)
     misplace(project, {f"files/{p}": v for p, v in {**BASE_FILES, **many}.items() if p != "backend/local_firestore.json"}, tmp_path)
-    (project / "files/alignerr.txt").write_text("edited after")  # yours now: kept
+    (project / "files/notes.txt").write_text("edited after")  # yours now: kept
     write_tree(downloads / "x_10_a_changed_files", {"files/backend/job_sites.py": "sites v2"})
     (downloads / "x_10_a_changed_files/changes.diff").write_text(git_diff(
         {"backend/job_sites.py": "sites (your edit)\n"}, {"backend/job_sites.py": "sites v2"}))
@@ -980,10 +980,10 @@ def test_files_an_earlier_update_misplaced_are_cleaned_up(project, downloads, tm
     assert run(project, downloads, "--yes") == 0
 
     left = sorted(p.relative_to(project).as_posix() for p in (project / "files").rglob("*") if p.is_file())
-    assert left == ["files/alignerr.txt"]
+    assert left == ["files/notes.txt"]
     out = capsys.readouterr().out
     assert "Cleanup: copies an earlier update put in the wrong place, in files/ (15)" in out
-    assert "= files/alignerr.txt" in out
+    assert "= files/notes.txt" in out
     assert "STOPPED" not in out  # not held to the deletion limit
     assert read(project, "backend/module_3.py") == "m3"  # the real files are untouched
 
@@ -1008,3 +1008,49 @@ def test_undone_updates_leave_nothing_to_clean_up(project, tmp_path):
     assert apply_update.main(["--root", str(project), "--undo"]) == 0
 
     assert apply_update.stray_files(project, apply_update.read_folder(project)) == ([], [])
+
+
+
+# --- Personal files (archive.PERSONAL_FILES: alignerr.txt) ----------------------------------
+
+
+@pytest.fixture
+def with_alignerr(project):
+    # Archives made before it was left out had it; yours has moved on since.
+    (project / "job-finder-20261107-085423.zip").unlink()
+    write_tree(project, {"alignerr.txt": "old notes"})
+    archive_files = dict(BASE_FILES, **{"alignerr.txt": "old notes"})
+    make_zip(project / "job-finder-20261107-085423.zip", archive_files)
+    touch(project / "job-finder-20261107-085423.zip", 3600)
+    write_tree(project, {"alignerr.txt": "your latest notes"})
+    return project
+
+
+@pytest.mark.parametrize("yours", ["old notes", "your latest notes"])
+def test_an_update_without_alignerr_never_deletes_yours(with_alignerr, downloads, yours):
+    """Archives no longer have it. Even when yours is the same as the one in
+    an earlier archive (so it doesn't look like your edit), an update without
+    it mustn't delete it."""
+    project = with_alignerr
+    write_tree(project, {"alignerr.txt": yours})
+    make_zip(downloads / "job-finder-20261107-160000.zip", updated_files())  # no alignerr.txt
+
+    assert run(project, downloads, "--yes", "--all") == 0
+
+    assert read(project, "alignerr.txt") == yours
+    assert not (project / "backend/old_module.py").exists()  # real deletions still happen
+
+
+def test_an_update_with_alignerr_never_overwrites_yours(with_alignerr, downloads):
+    project = with_alignerr
+    make_zip(downloads / "job-finder-20261107-160000.zip", dict(updated_files(), **{"alignerr.txt": "theirs"}))
+
+    assert run(project, downloads, "--yes", "--all") == 0
+
+    assert read(project, "alignerr.txt") == "your latest notes"
+    assert read(project, "backend/job_search.py") == "search v2"
+
+
+def test_a_downloaded_folder_with_alignerr_is_still_a_download(tmp_path):
+    unzipped = write_tree(tmp_path / "unzipped", dict(BASE_FILES, **{"alignerr.txt": "notes"}))
+    assert not apply_update.is_working_copy(unzipped)

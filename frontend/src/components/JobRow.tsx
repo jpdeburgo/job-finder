@@ -57,6 +57,15 @@ export const JobRow = memo(function JobRow({ job, selected, busy, onSelect, onSt
           <RemoteLabel job={job} />
           {job.job_type && <span>{job.job_type}</span>}
         </div>
+        {job.matches_skills === false && (
+          <Badge
+            variant="outline"
+            className="mt-1 border-amber-300 text-amber-800 dark:border-amber-800 dark:text-amber-300"
+            title={job.skills_mismatch_reason ? `No longer matches your skills: ${job.skills_mismatch_reason}` : undefined}
+          >
+            No longer matches your skills
+          </Badge>
+        )}
       </TableCell>
 
       <TableCell>

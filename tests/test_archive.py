@@ -36,6 +36,8 @@ def project(tmp_path):
         ".git/HEAD": "ref",
         "job-finder-20260101-000000.zip": "old archive",
         "run.log": "log",
+        "alignerr.txt": "your notes",
+        "docs/alignerr.txt": "a project file that happens to share the name",
     }
     for relative, content in files.items():
         path = tmp_path / relative
@@ -56,6 +58,7 @@ def test_secrets_build_output_and_old_archives_are_left_out(project):
         "backend/job_search.py",
         "backend/local_firestore.json",
         "backend/tests/test_job_search.py",
+        "docs/alignerr.txt",  # only the root one is yours
         "frontend/src/app/page.tsx",
     ]
 
@@ -124,3 +127,13 @@ def test_main_list_writes_nothing(project, capsys):
 def test_main_rejects_a_missing_root(tmp_path, capsys):
     assert archive.main(["--root", str(tmp_path / "nope")]) == 1
     assert "is not a directory" in capsys.readouterr().err
+
+
+def test_personal_files_are_left_out_of_the_archive(project, tmp_path):
+    archived = archive.build_archive(project, tmp_path / "out.zip")
+
+    assert "alignerr.txt" not in archived
+    with zipfile.ZipFile(tmp_path / "out.zip") as zipped:
+        assert "alignerr.txt" not in zipped.namelist()
+    # Left out of the archive, not deleted or changed.
+    assert (project / "alignerr.txt").read_text() == "your notes"

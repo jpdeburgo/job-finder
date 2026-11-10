@@ -7,12 +7,17 @@ import { setupUser } from "@/test/user";
 import { JobsDashboard } from "./JobsDashboard";
 
 // Job calls go to fetchMock (tests queue its responses); the search panel's
-// /api/runs calls go to runsApiMock, so they never consume a queued response.
+// /api/runs calls go to runsApiMock, and Refresh's reassessment
+// (/api/jobs/reassess) to reassessMock, so they never consume a queued response.
 const fetchMock = vi.fn();
 const runsApiMock = vi.fn();
-vi.stubGlobal("fetch", (...args: [string, RequestInit?]) =>
-  String(args[0]).startsWith("/api/runs") ? runsApiMock(...args) : fetchMock(...args),
-);
+const reassessMock = vi.fn();
+vi.stubGlobal("fetch", (...args: [string, RequestInit?]) => {
+  const url = String(args[0]);
+  if (url.startsWith("/api/runs")) return runsApiMock(...args);
+  if (url === "/api/jobs/reassess") return reassessMock(...args);
+  return fetchMock(...args);
+});
 
 const store: StoreInfo = {
   backend: "local",
@@ -67,6 +72,19 @@ beforeEach(() => {
   fetchMock.mockReset();
   runsApiMock.mockReset();
   runsApiMock.mockImplementation(async () => jsonResponse({ run: null })); // no search run yet
+  reassessMock.mockReset();
+  reassessMock.mockImplementation(async () => jsonResponse(summary()));
+});
+
+const summary = (overrides = {}) => ({
+  total_jobs: 3,
+  reassessed: 3,
+  changed: 1,
+  no_longer_match: 0,
+  fetched: 0,
+  unavailable: 0,
+  skills_source: "saved",
+  ...overrides,
 });
 
 afterEach(() => {
@@ -414,6 +432,22 @@ describe("details drawer", () => {
     expect(fit.getByText("Asks for 6+ yrs; you have 5 (1 short)")).toBeInTheDocument();
   });
 
+  it("says why a job no longer matches your skills, with a link to change them", async () => {
+    const user = setupUser();
+    renderDashboard([
+      makeJob({ id: "stale", matches_skills: false, skills_mismatch_reason: "it mentions only SQL; a match needs 2 of your skills" }),
+      makeJob({ id: "fine", title: "Fine Job", matches_skills: true }),
+    ]);
+    expect(row("fine").queryByText("No longer matches your skills")).not.toBeInTheDocument();
+
+    await user.click(row("stale").getByRole("button", { name: /Show details/ }));
+    const details = within(await screen.findByRole("dialog"));
+    expect(details.getByTestId("skills-mismatch")).toHaveTextContent(
+      "No longer matches your skills: it mentions only SQL; a match needs 2 of your skills. Change them on the Skills page.",
+    );
+    expect(details.getByRole("link", { name: "Skills page" })).toHaveAttribute("href", "/skills");
+  });
+
   it("says why a job listed as remote was marked not remote", async () => {
     const user = setupUser();
     renderDashboard([
@@ -526,7 +560,7 @@ describe("refresh", () => {
 
     expect(await screen.findByText("Fresh Job")).toBeInTheDocument();
     expect(screen.queryByTestId("job-row-react")).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Firestore project 'p'");
+    expect(screen.getAllByRole("status")[0]).toHaveTextContent("Firestore project 'p'");
   });
 
   it("keeps the selected remote status listed after a refresh removes its last job", async () => {
@@ -555,6 +589,75 @@ describe("refresh", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not refresh: boom");
     expect(screen.getByTestId("job-row-react")).toBeInTheDocument();
   });
+
+  it("re-scores the saved jobs against your skills first, then reloads them", async () => {
+    const user = setupUser();
+    let finishReassess: (response: Response) => void = () => {};
+    reassessMock.mockImplementation(() => new Promise<Response>((resolve) => (finishReassess = resolve)));
+    const rescored = makeJob({
+      id: "react",
+      title: "React Developer",
+      matches_skills: false,
+      skills_mismatch_reason: "it doesn't mention any of your skills",
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ store, jobs: [rescored] }));
+    renderDashboard();
+
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByRole("button", { name: "Reassessing…" })).toBeDisabled();
+    expect(screen.getByText(/Re-scoring your saved jobs against your skills/)).toBeInTheDocument();
+    expect(reassessMock).toHaveBeenCalledWith("/api/jobs/reassess", { method: "POST" });
+    expect(fetchMock).not.toHaveBeenCalled(); // reassess first, then reload
+
+    finishReassess(jsonResponse(summary({ changed: 2, no_longer_match: 1, fetched: 3, unavailable: 1 })));
+
+    const notice = await screen.findByTestId("reassess-notice");
+    expect(notice).toHaveTextContent("Reassessed 3 jobs against your skills");
+    expect(notice).toHaveTextContent("2 jobs changed; 1 no longer matches (marked in the list).");
+    expect(notice).toHaveTextContent("Loaded 3 job descriptions from the job sites");
+    expect(notice).toHaveTextContent("1 job couldn't be reassessed");
+    const badge = await row("react").findByText("No longer matches your skills");
+    expect(badge).toHaveAttribute("title", "No longer matches your skills: it doesn't mention any of your skills");
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+
+    await user.click(within(notice).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("reassess-notice")).not.toBeInTheDocument();
+  });
+
+  it("still reloads when the search API isn't running, and says so", async () => {
+    const user = setupUser();
+    reassessMock.mockImplementation(async () =>
+      jsonResponse({ error: "The search API isn't reachable at http://127.0.0.1:8000. Start it with ..." }, 503),
+    );
+    fetchMock.mockResolvedValueOnce(jsonResponse({ store, jobs: [makeJob({ id: "fresh", title: "Fresh Job" })] }));
+    renderDashboard();
+
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("Fresh Job")).toBeInTheDocument();
+    const notice = screen.getByTestId("reassess-notice");
+    expect(notice).toHaveAttribute("role", "alert");
+    expect(notice).toHaveTextContent("Jobs reloaded, but not reassessed against your skills");
+    expect(notice).toHaveTextContent("Re-scoring needs the search API. The search API isn't reachable");
+  });
+
+  it("doesn't reassess again after a search, which already did", async () => {
+    const running = makeRun();
+    runsApiMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === "/api/runs" && init?.method === "POST") return jsonResponse({ run: running }, 202);
+      if (url === "/api/runs/abc123") return jsonResponse({ run: makeFinishedRun() });
+      return jsonResponse({ run: null });
+    });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ store, jobs: [makeJob({ id: "fresh", title: "Fresh Job" })] }));
+    const user = setupUser();
+    renderDashboard();
+
+    await user.click(await screen.findByRole("button", { name: "Run search" }));
+
+    expect(await screen.findByText("Fresh Job", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(reassessMock).not.toHaveBeenCalled();
+  }, 10_000);
 });
 
 describe("running a search", () => {

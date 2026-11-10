@@ -84,8 +84,11 @@ import archive
 # under one folder).
 PROJECT_MARKER = "backend/job_search.py"
 # Your data, not code: never overwritten or deleted. Matched against the
-# path relative to the project root.
-PROTECTED_PATHS = ("backend/local_firestore.json",)
+# path relative to the project root. Includes the personal files archive.py
+# leaves out (alignerr.txt): reading the project skips them (archive.iter_files),
+# so without this a download that has one would look like a new file and
+# replace yours.
+PROTECTED_PATHS = ("backend/local_firestore.json", *archive.PERSONAL_FILES)
 BACKUP_DIR_NAME = ".update-backups"
 BACKUP_RECORD = "backup.json"
 # Each applied update is kept here, inside its backup folder, so the next
@@ -1307,7 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-base", action="store_true",
                         help="don't compare with earlier copies: update every file that differs")
     parser.add_argument("--keep", action="append", default=[], metavar="PATTERN",
-                        help="another path pattern never to touch, e.g. 'alignerr.txt' (repeatable)")
+                        help="another path pattern never to touch, e.g. 'docs/my-notes.md' (repeatable)")
     parser.add_argument("--candidates", action="store_true", help="list the project zips found and exit")
     parser.add_argument("--undo", action="store_true", help="restore the files the last update changed")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent,

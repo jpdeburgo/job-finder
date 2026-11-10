@@ -480,7 +480,7 @@ def test_saved_jobs_are_corrected_from_their_title_and_this_runs_descriptions(st
 
 
 def test_main_corrects_saved_jobs_after_saving_the_run(store, monkeypatch):
-    def fake_search(selectors, include_unmarked, onsite, checked=None):
+    def fake_search(selectors, include_unmarked, onsite, checked=None, tracks=None):
         onsite["ig-onsite-desc"] = 'description: "must be onsite"'
         return []
 
@@ -590,7 +590,7 @@ def test_main_rechecks_saved_jobs_after_a_search(saved, monkeypatch):
     store, session = saved
     monkeypatch.setattr(job_search, "RECHECK_SAVED_JOBS", True)
 
-    def fake_search(selectors, include_unmarked, onsite, checked):
+    def fake_search(selectors, include_unmarked, onsite, checked, tracks=None):
         checked.add("insight-global-seen")
         return []
 
@@ -641,7 +641,7 @@ def test_searches_never_undo_your_work_arrangement(tmp_path, monkeypatch):
     store.update_job(match.job_id, work_arrangement="on_site")
 
     # The next run finds it again, flagged remote by the site, and re-saves it...
-    monkeypatch.setattr(job_search, "run_all_searches", lambda *args: [match])
+    monkeypatch.setattr(job_search, "run_all_searches", lambda *args, **kwargs: [match])
     job_search.main(store)
     # ...and a re-check says remote too.
     assert job_search.recheck_saved_jobs(store) == 0

@@ -20,7 +20,14 @@ Layout of the ``jobs`` collection (one document per job ID:
         first_seen_at, last_seen_at, emailed_at, applied_at,
         status_updated_at, notes
 
-The ``runs`` collection gets one auto-ID document per script run.
+The ``runs`` collection gets one auto-ID document per script run, and the
+``settings`` collection holds your own skill list from the dashboard
+(``settings/search_skills``; see search_skills.py).
+
+Each job's description is kept apart from it, in ``job_descriptions`` (same
+document ID: ``{"text": ..., "saved_at": ...}``), so saved jobs can be
+re-scored when you change your skills without loading every posting again,
+and the dashboard's job list stays small.
 """
 
 from __future__ import annotations
@@ -34,6 +41,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Iterator
+
+from search_skills import SEARCH_SKILLS_DOCUMENT, SearchSkills
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from job_search import JobMatch
@@ -66,6 +75,8 @@ WORK_ARRANGEMENTS = ("remote", "hybrid", "on_site")
 
 DEFAULT_JOBS_COLLECTION = "jobs"
 DEFAULT_RUNS_COLLECTION = "runs"
+DEFAULT_SETTINGS_COLLECTION = "settings"
+DEFAULT_DESCRIPTIONS_COLLECTION = "job_descriptions"
 DEFAULT_LOCAL_DB_PATH = Path(__file__).with_name("local_firestore.json")
 # Optional override for the stand-in's location. The Next.js dashboard in
 # ../frontend reads the same variable, so both sides agree on one file.
@@ -95,8 +106,10 @@ def local_db_path(override: Path | str | None = None) -> Path:
 
 
 def job_document(job: "JobMatch") -> dict[str, Any]:
-    """Return the job's searchable details as a flat, Firestore-friendly dict."""
+    """Return the job's searchable details as a flat, Firestore-friendly dict.
+    The description is saved separately (``job_descriptions``)."""
     data = asdict(job)
+    data.pop("description", None)
     data["score"] = job.score
     return data
 
@@ -109,10 +122,14 @@ class FirestoreJobStore:
         client: Any,
         jobs_collection: str = DEFAULT_JOBS_COLLECTION,
         runs_collection: str = DEFAULT_RUNS_COLLECTION,
+        settings_collection: str = DEFAULT_SETTINGS_COLLECTION,
+        descriptions_collection: str = DEFAULT_DESCRIPTIONS_COLLECTION,
     ) -> None:
         self._client = client
         self._jobs = client.collection(jobs_collection)
         self._runs = client.collection(runs_collection)
+        self._settings = client.collection(settings_collection)
+        self._descriptions = client.collection(descriptions_collection)
 
     @property
     def description(self) -> str:
@@ -183,6 +200,12 @@ class FirestoreJobStore:
             "runs_collection": os.environ.get(
                 "FIRESTORE_RUNS_COLLECTION", DEFAULT_RUNS_COLLECTION
             ),
+            "settings_collection": os.environ.get(
+                "FIRESTORE_SETTINGS_COLLECTION", DEFAULT_SETTINGS_COLLECTION
+            ),
+            "descriptions_collection": os.environ.get(
+                "FIRESTORE_DESCRIPTIONS_COLLECTION", DEFAULT_DESCRIPTIONS_COLLECTION
+            ),
         }
 
     # Reads ----------------------------------------------------------------
@@ -221,6 +244,22 @@ class FirestoreJobStore:
         filters and sorts them; see job_queries.py)."""
         return [(doc.id, doc.to_dict()) for doc in self._jobs.stream()]
 
+    def load_search_skills(self) -> dict[str, Any] | None:
+        """The skill list saved from the dashboard (``settings/search_skills``)
+        as stored, or None if you haven't saved one (the search then uses the
+        defaults in job_search.py). ``search_skills.skills_from_document``
+        validates it."""
+        snapshot = self._settings.document(SEARCH_SKILLS_DOCUMENT).get()
+        return snapshot.to_dict() if snapshot.exists else None
+
+    def load_descriptions(self) -> dict[str, str]:
+        """Every saved job description, by job ID."""
+        return {
+            doc.id: str(data.get("text") or "")
+            for doc in self._descriptions.stream()
+            if (data := doc.to_dict()) and data.get("text")
+        }
+
     def _where(self, field: str, op: str, value: Any) -> Any:
         try:
             from google.cloud.firestore_v1 import FieldFilter
@@ -238,12 +277,28 @@ class FirestoreJobStore:
         Jobs seen before only get their details and ``last_seen_at``
         refreshed, so a status you set by hand is never overwritten.
         """
+        matches = list(matches)
         now = utcnow()
         self._commit_in_batches(
             [
                 (self._doc_id(job.job_id), self._match_fields(job, job.job_id in new_ids, now))
                 for job in matches
             ]
+        )
+        self.save_descriptions({job.job_id: job.description for job in matches if job.description})
+
+    def save_descriptions(self, texts: dict[str, str]) -> None:
+        """Keep jobs' descriptions (by job ID), for re-scoring them later."""
+        now = utcnow()
+        self._commit_in_batches(
+            [(self._doc_id(job_id), {"text": text, "saved_at": now}) for job_id, text in sorted(texts.items())],
+            self._descriptions,
+        )
+
+    def update_jobs(self, fields_by_id: dict[str, dict[str, Any]]) -> None:
+        """Merge ``fields`` into each job (batched); used to re-score saved jobs."""
+        self._commit_in_batches(
+            [(self._doc_id(job_id), fields) for job_id, fields in sorted(fields_by_id.items())]
         )
 
     def mark_emailed(self, job_ids: Iterable[str], gmail_message_id: str | None) -> None:
@@ -314,6 +369,12 @@ class FirestoreJobStore:
         reference.update(fields)
         return reference.get().to_dict()
 
+    def save_search_skills(self, skills: SearchSkills) -> None:
+        """Save your own skill list, exactly as the dashboard's Skills page does."""
+        self._settings.document(SEARCH_SKILLS_DOCUMENT).set(
+            {**skills.as_document(), "updated_at": utcnow()}
+        )
+
     def log_run(
         self,
         *,
@@ -348,11 +409,14 @@ class FirestoreJobStore:
         self._commit_in_batches(writes)
         return len(writes)
 
-    def _commit_in_batches(self, writes: list[tuple[str, dict[str, Any]]]) -> None:
+    def _commit_in_batches(
+        self, writes: list[tuple[str, dict[str, Any]]], collection: Any = None
+    ) -> None:
+        collection = self._jobs if collection is None else collection
         for start in range(0, len(writes), FIRESTORE_BATCH_SIZE):
             batch = self._client.batch()
             for doc_id, fields in writes[start : start + FIRESTORE_BATCH_SIZE]:
-                batch.set(self._jobs.document(doc_id), fields, merge=True)
+                batch.set(collection.document(doc_id), fields, merge=True)
             batch.commit()
 
     # Field helpers ----------------------------------------------------------
@@ -360,6 +424,8 @@ class FirestoreJobStore:
     @staticmethod
     def _match_fields(job: "JobMatch", is_new: bool, now: datetime) -> dict[str, Any]:
         fields = job_document(job)
+        # The search just matched it on your current skills.
+        fields.update(matches_skills=True, skills_mismatch_reason=None)
         fields["last_seen_at"] = now
         if is_new:
             fields.update(first_seen_at=now, status=STATUS_UNEMAILED, status_updated_at=now)

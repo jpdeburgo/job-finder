@@ -5,7 +5,7 @@ A personal job-hunting pipeline in two parts:
 | Directory | What it is | Docs |
 | --- | --- | --- |
 | [`backend/`](backend/) | Python script that searches the careers pages in `JOB_SEARCH_URLS` (`backend/job_boards.py`: Insight Global contract roles, Accenture, and 18 company Workday/Greenhouse boards; more Workday, Greenhouse, and Lever boards can be added by URL) for matching remote roles, ranks each by a 0-100 fit score, emails you a digest through the Gmail API, and records every match in Firebase Firestore (or a local JSON stand-in). Includes a CLI for updating statuses and a FastAPI app (`api.py`) so the dashboard can start a search. Runs daily on Render as a cron job. | [backend/README.md](backend/README.md) |
-| [`frontend/`](frontend/) | Next.js + shadcn/ui dashboard over the same database: a home screen with where your search stands (totals, newest matches, recent activity) and a button to run a search on demand, plus a tracker to browse every job, search/filter/sort, change statuses, mark jobs applied, keep notes, and jump to the posting, the digest email, or an Insight Global search in a new tab. | [frontend/README.md](frontend/README.md) |
+| [`frontend/`](frontend/) | Next.js + shadcn/ui dashboard over the same database: a home screen with where your search stands (totals, newest matches, recent activity) and a button to run a search on demand, a Skills page to edit the skills the search looks for, plus a tracker to browse every job, search/filter/sort, change statuses, mark jobs applied, keep notes, and jump to the posting, the digest email, or an Insight Global search in a new tab. | [frontend/README.md](frontend/README.md) |
 
 Both halves choose the database the same way, from the same environment
 variables (`IG_STATE_BACKEND`, `GOOGLE_APPLICATION_CREDENTIALS`, ...). With
@@ -57,7 +57,8 @@ cd frontend && npm test      # vitest; add --coverage for a report
 `archive.py` zips the repository for sharing or backup, leaving out
 `credentials.json`, `token.json`, `.git`, `.env` (and `.env.*` except
 `.env.example`), Firebase service-account keys, `node_modules`, `.next`,
-virtualenvs, caches, and earlier archives:
+virtualenvs, caches, earlier archives, and your own `alignerr.txt` in the
+project root (`PERSONAL_FILES` in `archive.py`):
 
 ```bash
 python3 archive.py            # writes job-finder-<timestamp>.zip in this directory
@@ -102,8 +103,9 @@ that's no longer in Downloads, so it asks whether to take the zip's versions
 (`--force`: yes, `--keep-mine`: no; `--yes` alone keeps yours). `--all` takes
 the zip's version of everything in it.
 
-Secrets, `node_modules`, and `backend/local_firestore.json` are never
-touched. A bundle of all the code deletes only files it removed, never files
+Secrets, `node_modules`, `backend/local_firestore.json`, and `alignerr.txt`
+are never touched (archives leave `alignerr.txt` out, so an update that has
+one isn't yours and mustn't replace it). A bundle of all the code deletes only files it removed, never files
 you created, and an update that would delete more than 5 files stops unless
 you add `--allow-deletes`. Folders in Downloads that someone has worked in
 (with `.git`, `node_modules`, `__pycache__`, ...) are never taken for a

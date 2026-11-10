@@ -1,6 +1,7 @@
 "use client";
 
 import { CheckIcon, ExternalLinkIcon, MailIcon, SearchIcon, XIcon } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -85,6 +86,16 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave, onArrangeme
           <WorkArrangementSelect job={job} disabled={busy} onChange={onArrangementChange} />
           <span className="text-muted-foreground">Not what the posting says? Set it here.</span>
         </div>
+        {job.matches_skills === false && (
+          <p className="text-xs text-amber-800 dark:text-amber-300" data-testid="skills-mismatch">
+            No longer matches your skills{job.skills_mismatch_reason ? `: ${job.skills_mismatch_reason}` : ""}. Change
+            them on the{" "}
+            <Link href="/skills" className="underline underline-offset-4">
+              Skills page
+            </Link>
+            .
+          </p>
+        )}
         {job.is_remote === false && !job.work_arrangement && job.not_remote_reason && (
           <p className="text-muted-foreground text-xs" data-testid="not-remote-reason">
             Listed as remote, but {job.not_remote_reason}.

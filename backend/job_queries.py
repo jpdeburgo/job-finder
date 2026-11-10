@@ -110,6 +110,9 @@ def normalize_job(doc_id: str, data: dict[str, Any]) -> dict[str, Any]:
         "fit_score": _number(data.get("fit_score")),
         "fit_breakdown": _breakdown(data.get("fit_breakdown")),
         "fit_reasons": [r for r in data.get("fit_reasons") or [] if isinstance(r, str)],
+        # Whether the job still matches your skills (null until assessed), and why not.
+        "matches_skills": data.get("matches_skills") if isinstance(data.get("matches_skills"), bool) else None,
+        "skills_mismatch_reason": _string(data.get("skills_mismatch_reason")),
         # Why a job the site called remote was marked not remote (on-site/hybrid wording).
         "not_remote_reason": _string(data.get("not_remote_reason")),
         "status": _string(data.get("status")) or "unknown",

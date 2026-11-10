@@ -10,11 +10,12 @@ Searches every careers page in `JOB_SEARCH_URLS` (in `job_boards.py`: Insight
 Global, Accenture, and 18 company Workday/Greenhouse boards; see
 [Job sites](#job-sites)) for remote jobs matching configurable tracks:
 
-- **Core stack:** software engineering roles scored against the skills in
-  `RESUME_SKILLS`. A job needs at least two matches, one of them a core
-  language (`CORE_LANGUAGE_SKILLS`: Python, JavaScript, TypeScript, Java,
-  React, Node.js), so postings that only mention cloud tooling or SQL
-  don't qualify.
+- **Core stack:** software engineering roles scored against your skills. A
+  job needs at least two matches, one of them a core skill (by default
+  Python, JavaScript, TypeScript, Java, React, Node.js), so postings that
+  only mention cloud tooling or SQL don't qualify. Edit the list on the
+  dashboard's **Skills** page (see [Your skills](#your-skills)); until you
+  do, the search uses `RESUME_SKILLS` and `CORE_LANGUAGE_SKILLS`.
 - **Growth tracks (Java, iOS, .NET):** junior and entry-level roles in a
   single skill that do not explicitly require more than three years of
   experience.
@@ -182,6 +183,113 @@ on-site jobs for a site, turn off remote-only for it:
 agency, and off for every other site, since companies hiring directly mostly
 post full-time roles.
 
+## Your skills
+
+The skills the Core track matches on, which of them are core, and how well
+you know each are edited on the dashboard's **Skills** page (`/skills`): add
+skills (several at once, comma-separated), move the ones that are your main
+stack up to **Core skills**, rate each one 1 to 5 stars, remove the rest,
+and **Save**. The list is saved in the database, next to your jobs:
+
+```
+settings/search_skills
+    skills        ["Python", "Go", "Kubernetes", ...]   every skill to look for
+    core_skills   ["Python", "Go"]                      your main stack (a subset of skills)
+    proficiency   {"Python": 5, "Go": 2, ...}           how well you know each, 1-5 stars
+    updated_at
+```
+
+Saving also re-scores the jobs you've already saved (see
+[Reassessing saved jobs](#reassessing-saved-jobs)), when the API is running.
+
+Every search reads it when it starts (the cron job, the dashboard's **Run
+search**, and `python job_search.py` alike), and prints which list it's using:
+
+```
+Skills (saved in the dashboard; * = core): Python*, Go*, Kubernetes, SQL
+```
+
+What the list changes:
+
+- **Matching.** A Core-track job needs `MIN_SKILL_MATCHES` (2) of your
+  skills, at least one of them core. Matching ignores case and only matches
+  whole words, so "Java" doesn't match "JavaScript".
+- **Fit score.** Core skills count 1 and the others 0.5, each scaled by your
+  stars for it (see [Proficiency](#proficiency) and [Fit score](#fit-score)).
+- **Unfamiliar tech.** A skill you add that's in `NON_RESUME_TITLE_TECH`
+  (Kotlin, PHP, Snowflake, ...) stops counting as off your resume, so titles
+  naming it are no longer dropped and descriptions naming it no longer cost
+  fit points.
+
+The growth tracks (Java, iOS, .NET) keep their own single skill.
+**Reset to defaults** on the Skills page deletes the document, and searches
+go back to `RESUME_SKILLS` and `CORE_LANGUAGE_SKILLS` in `job_search.py`. A
+list that can't be used (say, edited by hand in the Firebase console so it
+has no core skill) is ignored with a warning and the defaults are used.
+`frontend/src/lib/skills.ts` mirrors the two default lists to show them before
+you save your own (a test checks they match), and both sides validate a list
+the same way (`search_skills.py`).
+
+### Proficiency
+
+Stars say how well you know a skill. They never change which jobs match,
+only how well a match fits: each matched skill's weight in the fit score
+(core 1, other 0.5) is multiplied by its stars' factor
+(`PROFICIENCY_FACTORS` in `job_fit.py`):
+
+| Stars | Label | Factor |
+| --- | --- | --- |
+| 1 | Beginner | 0.25 |
+| 2 | Familiar | 0.6 |
+| 3 | Proficient | 1.0 (the default) |
+| 4 | Advanced | 1.25 |
+| 5 | Expert | 1.5 |
+
+So a posting built on skills you're expert in reaches full skill points
+sooner, and one that leans on skills you barely know scores lower. A core
+skill in the title ("React Developer") earns its 15 role points in full at 3
+stars or more, and a share at fewer (15 x 0.6 at 2 stars). New skills, and
+every skill in a list saved before stars existed, count as 3 stars, so
+their fit scores are unchanged until you rate them. The fit reasons show the
+stars you've set, e.g. "Skills: Python 5★, React, SQL 1★ (2 core)". Each
+spelling of a skill (React, ReactJS) has its own stars; a posting that uses
+both is scored with the better one.
+
+### Reassessing saved jobs
+
+Jobs you've already saved are re-scored against your current skills and
+stars when you save your skills on the dashboard's Skills page or click
+**Refresh** on its Jobs page (both call `POST /jobs/reassess`, so the
+[API](#running-a-search-from-the-dashboard-http-api) must be running), at
+the end of every search, or with:
+
+```bash
+pipenv run python job_search.py --reassess
+```
+
+Each job's matched skills, `score`, and fit score are worked out again from
+its description, on the track it was found on, and the job is marked with
+whether it would still match:
+
+| Field | Meaning |
+| --- | --- |
+| `matches_skills` | `true`: still a match. `false`: it wouldn't be found with your skills now. Missing until the job is first reassessed. |
+| `skills_mismatch_reason` | Why not, e.g. "it mentions only SQL; a match needs 2 of your skills" or "its title names Kotlin, which isn't one of your skills". |
+
+Jobs that no longer match are **flagged, never deleted**, and their status,
+notes, and everything else are left alone. The dashboard shows a "No longer
+matches your skills" badge on them. Only jobs whose fields actually change
+are written.
+
+Re-scoring needs each job's description. Searches keep it, in the
+`job_descriptions` collection (one document per job ID, apart from the job so
+the dashboard's job list stays small). Jobs saved before that have theirs
+loaded from their job site the first time you reassess (one request per job,
+so it can take a minute) and kept for next time. A posting that has closed
+can't be loaded; that job keeps its old score and the summary counts it. A
+search's own reassessment only uses descriptions already saved, and the
+re-check of saved jobs (`RECHECK_SAVED_JOBS`) saves the ones it loads.
+
 ## Fit score
 
 Every match gets a **fit score** from 0 to 100 (`job_fit.py`) that ranks how
@@ -195,8 +303,8 @@ Developer" built on your main languages.
 
 | Part | Points | What it measures |
 | --- | --- | --- |
-| `skills` | 0 to 55 | Resume skills the posting mentions. Core languages (`CORE_LANGUAGE_SKILLS`) count 1, other skills 0.5, and spellings of one skill (`SKILL_ALIASES`: React/ReactJS) count once. Full marks at 4. |
-| `role` | 0 to 45 | The title is a role you target (`TARGET_ROLE_TITLES`: Software Engineer, Full Stack, Backend, ...) = 30, or a generic one (`GENERIC_ROLE_TITLES`: Developer) = 15; a core language in the title adds 15. |
+| `skills` | 0 to 55 | [Your skills](#your-skills) the posting mentions. Core skills count 1, other skills 0.5, times your [stars](#proficiency) for each (1 star 0.25x ... 5 stars 1.5x), and spellings of one skill (`SKILL_ALIASES`: React/ReactJS) count once. Full marks at 4. |
+| `role` | 0 to 45 | The title is a role you target (`TARGET_ROLE_TITLES`: Software Engineer, Full Stack, Backend, ...) = 30, or a generic one (`GENERIC_ROLE_TITLES`: Developer) = 15; a core skill in the title adds 15 (a share of it if you've rated that skill under 3 stars). |
 | `experience` | 0 or less | Years asked for (or implied by the title: Senior ~5, Lead/Staff ~7, Principal ~9, whichever is more) against `YEARS_OF_EXPERIENCE`. 1 year short keeps 90%, 2 keep 75%, 3 keep 60%, 4+ keep 45%. |
 | `remote` | 0 or less | Remote keeps 100%, "remote not stated" 85%, hybrid/on-site 60%. |
 | `stack` | 0 or less | The description names tech not on your resume (`NON_RESUME_TITLE_TECH`): -5% each, at most -15%. |
@@ -221,6 +329,7 @@ pipenv run python job_search.py --site workday        # every Workday board
 pipenv run python job_search.py --local --site https://boards.greenhouse.io/acme   # try a new board
 pipenv run python job_search.py --include-unmarked    # also keep jobs whose remote status isn't stated
 pipenv run python job_search.py --list-sites          # what's configured and how each is read
+pipenv run python job_search.py --reassess            # re-score saved jobs against your skills (no search, no email)
 pipenv run uvicorn api:app --reload                   # let the dashboard's Run search button start runs (see below)
 ```
 
@@ -271,8 +380,9 @@ Email sent (...).
 [local firestore] set runs/4yDsBPXRANBbEYCFdI1R
 ```
 
-Tune search terms, skills, remote-only behavior, page depth, and matching
-thresholds at the top of `job_search.py`.
+Tune search terms, the default skills, remote-only behavior, page depth, and
+matching thresholds at the top of `job_search.py`. Your own skill list is
+edited in the dashboard (see [Your skills](#your-skills)).
 
 ## Running a search from the dashboard (HTTP API)
 
@@ -312,6 +422,7 @@ timestamps as ISO strings.
 | --- | --- |
 | `GET /jobs` | Jobs matching the filters below, sorted, paged: `{"jobs": [...], "total", "limit", "offset"}`. `sort`: `last_seen` (default), `posted`, `salary`, `score`, `title`, `status`, the same orders as the dashboard's Sort menu ("Not listed" salaries last). `limit` 1-500 (default 100), `offset`. |
 | `GET /jobs/stats` | Counts by status (every status, zeros included), company, track, and remote status, plus `total` and `applied`. Takes the same filters. |
+| `POST /jobs/reassess` | Re-scores every saved job against your current skills (see [Reassessing saved jobs](#reassessing-saved-jobs)) and returns a summary: `total_jobs`, `reassessed`, `changed`, `no_longer_match`, `fetched` (descriptions loaded from the sites), `unavailable`, `skills_source`. `?fetch=false` skips loading missing descriptions. `409` while a search runs (a search can't start during one either). The dashboard's **Refresh** calls it. |
 | `GET /jobs/{job_id}` | One job: `{"job": ...}`, or `404`. |
 | `PATCH /jobs/{job_id}` | `{"status": "applied", "notes": "..."}` (either or both). Writes exactly what the dashboard and `jobs_cli.py` write: `status_updated_at`, and `applied_at` for `applied`. `""` or `null` notes clear them. Returns the updated job. |
 
@@ -340,8 +451,9 @@ curl -X PATCH http://127.0.0.1:8000/jobs/accenture-R00212345 \
 ```
 
 The full list, with every parameter, is at `/docs` while the API runs. The
-dashboard doesn't use these endpoints yet. It still reads the database
-through its own `/api/jobs` routes, so both keep working side by side.
+dashboard uses only `POST /jobs/reassess` (its **Refresh** button). It still
+reads and updates jobs through its own `/api/jobs` routes, so both keep
+working side by side.
 
 Things to know:
 
@@ -437,6 +549,12 @@ and vice versa. The file is git-ignored — it's your personal tracking data.
   },
   "runs": {
     "4yDsBPXRANBbEYCFdI1R": { "ran_at": "...", "total_matches": 12, "new_matches": 3, "email_sent": true, ... }
+  },
+  "settings": {
+    "search_skills": { "skills": ["Python", "Go", ...], "core_skills": ["Python"], "updated_at": "..." }
+  },
+  "job_descriptions": {
+    "insight-global-6a506de5-fa1b-4df7-b3a1-b4e2dfe149ba": { "text": "...", "saved_at": "..." }
   }
 }
 ```
@@ -451,7 +569,7 @@ and vice versa. The file is git-ignored — it's your personal tracking data.
    git-ignored).
 3. `export GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json`
    (or paste the file's contents into `FIREBASE_SERVICE_ACCOUNT_JSON`).
-4. Copy what you've tracked locally, statuses included:
+4. Copy what you've tracked locally, statuses (and your skill list) included:
 
    ```bash
    pipenv run python jobs_cli.py migrate local_firestore.json
@@ -477,6 +595,7 @@ fields:
 | `applied_at`, `status_updated_at`, `notes` | Set when you change the status. |
 | `work_arrangement`, `work_arrangement_set_at` | How you say the job is worked (`remote`, `hybrid`, `on_site`), overriding the site's `is_remote`; searches never change it. |
 | `not_remote_reason` | Why the search marked a job the site called remote as not remote. |
+| `matches_skills`, `skills_mismatch_reason` | Whether the job still matches your skills, and why not (see [Reassessing saved jobs](#reassessing-saved-jobs)). |
 
 Matches are saved **before** the email goes out, as `unemailed`, then flipped
 to `emailed` once Gmail accepts the digest. If the send fails, nothing is lost:

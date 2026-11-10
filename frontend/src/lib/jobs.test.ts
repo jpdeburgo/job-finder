@@ -84,6 +84,15 @@ describe("normalizeJob", () => {
     });
   });
 
+  it("reads whether the job still matches your skills (null until it's been assessed)", () => {
+    expect(
+      normalizeJob("a", { matches_skills: false, skills_mismatch_reason: "it doesn't mention any of your skills" }),
+    ).toMatchObject({ matches_skills: false, skills_mismatch_reason: "it doesn't mention any of your skills" });
+    expect(normalizeJob("b", { matches_skills: true })).toMatchObject({ matches_skills: true, skills_mismatch_reason: null });
+    expect(normalizeJob("c", {}).matches_skills).toBeNull();
+    expect(normalizeJob("d", { matches_skills: "no" }).matches_skills).toBeNull();
+  });
+
   it("leaves company null on documents saved before it existed", () => {
     expect(normalizeJob("old", { job_id: "old", title: "React Developer" }).company).toBeNull();
   });

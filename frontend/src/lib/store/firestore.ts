@@ -11,6 +11,7 @@ import { applicationDefault, cert, getApps, initializeApp, type App } from "fire
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import type { FirestoreStoreConfig } from "../config";
 import { normalizeJob, sortNewestFirst } from "../jobs";
+import { SEARCH_SKILLS_DOCUMENT, type SearchSkills } from "../skills";
 import type { Job, StoreInfo } from "../types";
 import { JobNotFoundError, type JobStore } from "./types";
 
@@ -24,6 +25,8 @@ export interface DocumentSnapshotLike {
 export interface DocumentReferenceLike {
   get(): Promise<DocumentSnapshotLike>;
   update(fields: Record<string, unknown>): Promise<unknown>;
+  set(fields: Record<string, unknown>): Promise<unknown>;
+  delete(): Promise<unknown>;
 }
 
 export interface CollectionReferenceLike {
@@ -59,6 +62,10 @@ export class FirestoreJobStore implements JobStore {
     return this.db.collection(this.config.collections.jobs);
   }
 
+  private get searchSkills(): DocumentReferenceLike {
+    return this.db.collection(this.config.collections.settings).doc(SEARCH_SKILLS_DOCUMENT);
+  }
+
   async listJobs(): Promise<Job[]> {
     const snapshot = await this.jobs.get();
     return sortNewestFirst(snapshot.docs.map((doc) => normalizeJob(doc.id, doc.data() ?? {})));
@@ -77,6 +84,26 @@ export class FirestoreJobStore implements JobStore {
     await reference.update(fields);
     const updated = await reference.get();
     return normalizeJob(id, updated.data() ?? {});
+  }
+
+  async getSearchSkills(): Promise<Record<string, unknown> | null> {
+    const snapshot = await this.searchSkills.get();
+    return snapshot.exists ? (snapshot.data() ?? {}) : null;
+  }
+
+  async saveSearchSkills(skills: SearchSkills, now: Date = new Date()): Promise<void> {
+    // A whole-document set: the list is replaced, never merged with the old one.
+    await this.searchSkills.set({
+      skills: [...skills.skills],
+      core_skills: [...skills.core_skills],
+      proficiency: { ...skills.proficiency },
+      updated_at: now,
+    });
+  }
+
+  async resetSearchSkills(): Promise<void> {
+    // Deleting a missing document is a no-op in Firestore.
+    await this.searchSkills.delete();
   }
 }
 

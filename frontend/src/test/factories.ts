@@ -24,6 +24,8 @@ export function makeJob(overrides: Partial<Job> = {}): Job {
     fit_breakdown: { skills: 41, role: 30, experience: 0, remote: 0, stack: 0 },
     fit_reasons: ["Skills: TypeScript, React (2 core)", 'Title is a target role ("Developer")'],
     not_remote_reason: null,
+    matches_skills: true,
+    skills_mismatch_reason: null,
     work_arrangement: null,
     site_is_remote: true,
     work_arrangement_set_at: null,

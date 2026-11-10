@@ -90,6 +90,14 @@ export interface Job {
   /** The same breakdown in words. */
   fit_reasons: string[];
   /**
+   * Whether the job still matches your skills, as of the last reassessment
+   * (Refresh, or a search); null until it's been assessed. Jobs that no
+   * longer match are flagged, never removed.
+   */
+  matches_skills: boolean | null;
+  /** Why it no longer matches, e.g. "it doesn't mention any of your skills"; null otherwise. */
+  skills_mismatch_reason: string | null;
+  /**
    * Why the search marked the job not remote although its site said remote,
    * e.g. `its title says "On-Site"` or `the site's workSetting = "Onsite"`; null otherwise.
    */
@@ -152,6 +160,19 @@ export interface SearchRun {
   output?: string[];
   /** How many older lines were dropped from `output`. */
   output_truncated?: number;
+}
+
+/** What re-scoring saved jobs against your skills did; mirrors `ReassessSummary` in backend/job_search.py. */
+export interface ReassessSummary {
+  total_jobs: number;
+  reassessed: number;
+  changed: number;
+  no_longer_match: number;
+  /** Descriptions loaded from the job sites this time (saved for next time). */
+  fetched: number;
+  /** Jobs left as they were: their posting couldn't be loaded. */
+  unavailable: number;
+  skills_source: "saved" | "default";
 }
 
 /** Options for a search; the same as job_search.py's --site and --include-unmarked. */

@@ -1,5 +1,6 @@
 Description:
-I want to incorporate more job boards into my job search. I have added a few constant variables that have job boards in the backend/job_boards.py file. I want them to all be used. I will also need to start coming up with a metric that can correctly identify which jobs would fit the user the best, so I will ask to do that to. 
+I want to be able to edit the skills that I am searching for in the UI
+
 
 Completeion:
 Run these commands in two different terminals:
@@ -7,7 +8,7 @@ cd backend/ && pipenv install && pipenv run python job_search.py --local && pipe
 
 cd frontend/ && npm install && npm run dev
 
-You can judge this is complete by checking in backend/local_firestore.json and seeing that there are more than two companies. These companies should also reflect in the UI. There should also be a new column that reflects how much of a match you are with that job based off of your skills listed in RESUME_SKILLS in backend/job_search.py
+You can judge this is complete by going to the settings (or wherever I create the option to do it since there is not settings page yet), setting your skills, clicking on the search button and the criteria for the search changes. The best fit should also change based on your skills
 
 Next Prompts:
-1. Add pagination to the UI too. 
+Next, can you allow users to rate their skills

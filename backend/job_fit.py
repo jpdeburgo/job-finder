@@ -14,11 +14,14 @@ It has two parts, which add up to the score:
    * ``skills`` (up to 55): your resume skills the posting mentions. A core
      language (Python, React, ...) counts 1, a supporting skill (SQL, AWS,
      Docker, ...) counts 0.5, and spellings of one skill (React / ReactJS)
-     count once. Full marks at ``SKILL_POINTS_FULL_AT`` (4).
+     count once. Each is then weighted by how well you know it, your 1-5
+     star proficiency (``PROFICIENCY_FACTORS``): 3 stars counts as is,
+     fewer counts less (1 star a quarter), more counts more (5 stars 1.5x).
+     Full marks at ``SKILL_POINTS_FULL_AT`` (4).
    * ``role`` (up to 45): whether the title is a role you target. A
      software-engineering title ("Software Engineer", "Full Stack", "Backend",
      ...) earns 30 and a generic one ("Developer") 15. A core skill in the
-     title ("React Developer") adds 15.
+     title ("React Developer") adds 15, less if you've rated it under 3 stars.
 
 2. **Adjustments** (0 or negative): things that make a relevant job a
    worse fit. Each takes a share of what's left, so it costs more on a
@@ -48,6 +51,7 @@ import re
 from dataclasses import dataclass, field
 
 from job_sites import Posting, contains_phrase
+from search_skills import DEFAULT_PROFICIENCY
 
 MAX_SCORE = 100
 SKILL_POINTS = 55
@@ -56,6 +60,9 @@ ROLE_POINTS = 45
 SKILL_POINTS_FULL_AT = 4.0
 CORE_SKILL_WEIGHT = 1.0
 SUPPORTING_SKILL_WEIGHT = 0.5
+# What a skill's 1-5 star proficiency multiplies its weight by. 3 stars (the
+# default, for skills you haven't rated) leaves it as it was.
+PROFICIENCY_FACTORS = {1: 0.25, 2: 0.6, 3: 1.0, 4: 1.25, 5: 1.5}
 TARGET_ROLE_POINTS = 30
 GENERIC_ROLE_POINTS = 15
 TITLE_SKILL_POINTS = 15
@@ -99,6 +106,29 @@ class CandidateProfile:
     # Spellings of one skill, e.g. ("React", "ReactJS"): a job mentioning
     # both gets credit once.
     skill_aliases: tuple[tuple[str, ...], ...] = ()
+    # (skill, 1-5 stars): how well you know each skill. Missing ones count as
+    # DEFAULT_PROFICIENCY.
+    proficiency: tuple[tuple[str, int], ...] = ()
+
+    def level(self, skill: str) -> int:
+        """Your stars for ``skill``. Each spelling (React, ReactJS) has its own."""
+        return dict(self.proficiency).get(skill, DEFAULT_PROFICIENCY)
+
+
+def proficiency_factor(level: int) -> float:
+    return PROFICIENCY_FACTORS.get(level, 1.0)
+
+
+def _found_level(skill: str, found: list[str], profile: CandidateProfile) -> int:
+    """Stars for a skill as the posting names it: the spelling it uses, or
+    the best-rated one if it uses several (React and ReactJS)."""
+    group = next((g for g in profile.skill_aliases if skill in g), (skill,))
+    return max(profile.level(name) for name in found if name in group) if skill in found else profile.level(skill)
+
+
+def _with_stars(skill: str, level: int) -> str:
+    """"Python 5★" when you've rated it other than the default, else "Python"."""
+    return skill if level == DEFAULT_PROFICIENCY else f"{skill} {level}★"
 
 
 @dataclass(frozen=True)
@@ -133,18 +163,20 @@ def _canonical_skills(skills: list[str], profile: CandidateProfile) -> list[str]
 
 def _skill_part(posting: Posting, profile: CandidateProfile) -> tuple[float, list[str]]:
     text = f"{posting.title} {posting.description or ''}"
-    found = _canonical_skills(
-        [skill for skill in profile.skills if contains_phrase(text, skill)], profile
-    )
+    mentioned = [skill for skill in profile.skills if contains_phrase(text, skill)]
+    found = _canonical_skills(mentioned, profile)
+    levels = {skill: _found_level(skill, mentioned, profile) for skill in found}
     core = set(profile.core_skills)
     weight = sum(
-        CORE_SKILL_WEIGHT if skill in core else SUPPORTING_SKILL_WEIGHT for skill in found
+        (CORE_SKILL_WEIGHT if skill in core else SUPPORTING_SKILL_WEIGHT)
+        * proficiency_factor(levels[skill])
+        for skill in found
     )
     points = SKILL_POINTS * min(1.0, weight / SKILL_POINTS_FULL_AT)
     if found:
         core_found = [s for s in found if s in core]
         other = [s for s in found if s not in core]
-        detail = ", ".join(core_found + other)
+        detail = ", ".join(_with_stars(s, levels[s]) for s in core_found + other)
         reason = f"Skills: {detail} ({len(core_found)} core)"
     else:
         reason = "Skills: none of your resume skills are mentioned"
@@ -164,12 +196,18 @@ def _role_part(title: str, profile: CandidateProfile) -> tuple[float, list[str]]
     else:
         points = 0
         reasons.append("Title isn't one of your target roles")
-    title_skills = _canonical_skills(
-        [skill for skill in profile.core_skills if contains_phrase(title, skill)], profile
-    )
+    in_title = [skill for skill in profile.core_skills if contains_phrase(title, skill)]
+    title_skills = _canonical_skills(in_title, profile)
     if title_skills:
-        points += TITLE_SKILL_POINTS
-        reasons.append(f"Title names your stack ({', '.join(title_skills)})")
+        levels = {skill: _found_level(skill, in_title, profile) for skill in title_skills}
+        # The skill you know best counts; never more than the full bonus.
+        share = min(1.0, proficiency_factor(max(levels.values())))
+        points += TITLE_SKILL_POINTS * share
+        names = ", ".join(_with_stars(skill, levels[skill]) for skill in title_skills)
+        reasons.append(
+            f"Title names your stack ({names})" if share >= 1.0
+            else f"Title names your stack ({names}), part credit for your proficiency"
+        )
     return min(points, ROLE_POINTS), reasons
 
 

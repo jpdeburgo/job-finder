@@ -6,7 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Sheet } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { fetchJobs, patchJob } from "@/lib/client";
+import { fetchJobs, patchJob, reassessJobs } from "@/lib/client";
 import {
   DEFAULT_FILTERS,
   countByStatus,
@@ -19,12 +19,14 @@ import {
   type SortKey,
 } from "@/lib/jobs";
 import { DEFAULT_PAGE_SIZE, paginate, type PageSize } from "@/lib/pagination";
+import { describeReassess, reassessProblem, type ReassessNotice } from "@/lib/reassess";
 import { JOB_STATUSES, type Job, type JobPatch, type JobStatus, type StoreInfo, type WorkArrangement } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { FilterBar } from "./FilterBar";
 import { JobDetails } from "./JobDetails";
 import { JobRow } from "./JobRow";
 import { Pagination } from "./Pagination";
+import { ReassessNoticeAlert } from "./ReassessNoticeAlert";
 import { RunSearchPanel } from "./RunSearchPanel";
 import { statusClasses, statusLabel } from "./StatusBadge";
 import { StoreBanner } from "./StoreBanner";
@@ -59,6 +61,8 @@ export function JobsDashboard({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
+  const [reassessing, setReassessing] = useState(false);
+  const [notice, setNotice] = useState<ReassessNotice | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const counts = useMemo(() => countByStatus(jobs), [jobs]);
@@ -143,9 +147,25 @@ export function JobsDashboard({
     });
   };
 
-  const refresh = async () => {
+  /**
+   * Reload the jobs. From the Refresh button, first re-score every saved job
+   * against your skills (through the search API); if that can't happen, the
+   * jobs are still reloaded and the notice says why.
+   */
+  const refresh = async ({ reassess = false }: { reassess?: boolean } = {}) => {
     setRefreshing(true);
     setError(null);
+    if (reassess) {
+      setReassessing(true);
+      setNotice(null);
+      try {
+        setNotice(describeReassess(await reassessJobs()));
+      } catch (caught) {
+        setNotice(reassessProblem(caught));
+      } finally {
+        setReassessing(false);
+      }
+    }
     try {
       const result = await fetchJobs();
       setJobs(result.jobs);
@@ -161,7 +181,8 @@ export function JobsDashboard({
     <div className="space-y-4">
       <StoreBanner store={store} />
 
-      {/* A finished search reloads the table, so its new matches show up right away. */}
+      {/* A finished search reloads the table, so its new matches show up right away
+          (the search has already reassessed the saved jobs). */}
       <RunSearchPanel onFinished={() => void refresh()} />
 
       <div className="flex flex-wrap items-center gap-3">
@@ -201,10 +222,20 @@ export function JobsDashboard({
         remoteStatuses={remoteStatuses}
         tracks={tracks}
         refreshing={refreshing}
+        reassessing={reassessing}
         onFiltersChange={updateFilters}
         onSortChange={updateSort}
-        onRefresh={refresh}
+        onRefresh={() => void refresh({ reassess: true })}
       />
+
+      {reassessing && (
+        <p className="text-muted-foreground text-sm" aria-live="polite">
+          Re-scoring your saved jobs against your skills… The first time, each job&apos;s description is loaded from
+          its site, which can take a minute.
+        </p>
+      )}
+
+      {notice && <ReassessNoticeAlert notice={notice} onDismiss={() => setNotice(null)} />}
 
       {error && (
         <Alert variant="destructive">

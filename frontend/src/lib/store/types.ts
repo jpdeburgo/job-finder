@@ -1,3 +1,4 @@
+import type { SearchSkills } from "../skills";
 import type { Job, StoreInfo } from "../types";
 
 /**
@@ -19,6 +20,15 @@ export interface JobStore {
    * the job doesn't exist.
    */
   updateJob(id: string, fields: Record<string, unknown>): Promise<Job>;
+  /**
+   * Your saved skill list (`settings/search_skills`) as stored, or null when
+   * you haven't saved one and the search uses its defaults.
+   */
+  getSearchSkills(): Promise<Record<string, unknown> | null>;
+  /** Save your skill list (already validated), stamped with `updated_at`. */
+  saveSearchSkills(skills: SearchSkills, now?: Date): Promise<void>;
+  /** Delete the saved list, so the search goes back to its defaults. */
+  resetSearchSkills(): Promise<void>;
 }
 
 export class JobNotFoundError extends Error {

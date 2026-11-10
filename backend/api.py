@@ -20,6 +20,9 @@ Endpoints::
 
     GET   /jobs           tracked jobs, filtered, sorted, and paged (see list_jobs below)
     GET   /jobs/stats     counts by status, company, track, and remote (same filters)
+    POST  /jobs/reassess  re-score every saved job against your current skills -> summary
+                          (?fetch=false: only jobs whose description is already saved)
+                          409 while a search (or another reassessment) is running
     GET   /jobs/{job_id}  one job                                   404 if it isn't tracked
     PATCH /jobs/{job_id}  {"status": "applied", "notes": "...", "work_arrangement": "on_site"}
                           -> the updated job
@@ -188,6 +191,11 @@ class RunInProgressError(RuntimeError):
         self.run = run
 
 
+class ReassessInProgressError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("Saved jobs are being reassessed against your skills; try again in a moment.")
+
+
 def _default_search(sites: list[str], include_unmarked: bool) -> job_search.RunSummary:
     # Looked up at call time, so tests can monkeypatch job_search.main.
     return job_search.main(site_selectors=sites or None, include_unmarked=include_unmarked)
@@ -202,9 +210,29 @@ class RunManager:
         self._lock = threading.Lock()
         self._runs: deque[SearchRun] = deque(maxlen=RUN_HISTORY_SIZE)
         self._active: SearchRun | None = None
+        self._reassessing = False
+
+    @contextlib.contextmanager
+    def reassessing(self) -> Any:
+        """Hold while reassessing saved jobs: a search and a reassessment both
+        rewrite jobs, so they never run at once. Raises ``RunInProgressError``
+        or ``ReassessInProgressError`` if something else already is."""
+        with self._lock:
+            if self._active is not None:
+                raise RunInProgressError(self._active)
+            if self._reassessing:
+                raise ReassessInProgressError()
+            self._reassessing = True
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._reassessing = False
 
     def start(self, sites: list[str], include_unmarked: bool) -> SearchRun:
         with self._lock:
+            if self._reassessing:
+                raise ReassessInProgressError()
             if self._active is not None:
                 raise RunInProgressError(self._active)
             run = SearchRun(
@@ -354,6 +382,12 @@ class Job(BaseModel):
         description='Points behind fit_score, e.g. {"skills": 48, "role": 30, "experience": -8}; they add up to it'
     )
     fit_reasons: list[str] = Field(description="The same breakdown in words")
+    matches_skills: bool | None = Field(
+        description="Whether the job still matches your skills; null until it's been (re)assessed"
+    )
+    skills_mismatch_reason: str | None = Field(
+        description="Why it no longer matches, e.g. \"it doesn't mention any of your skills\""
+    )
     not_remote_reason: str | None = Field(
         description="Why the job was marked not remote although its site said remote, "
         'e.g. \'its description: "must be onsite in Dallas"\''
@@ -402,6 +436,18 @@ class JobUpdate(BaseModel):
 
 class JobResponse(BaseModel):
     job: Job
+
+
+class ReassessResult(BaseModel):
+    """Mirrors ``job_search.ReassessSummary``."""
+
+    total_jobs: int = Field(description="Every saved job")
+    reassessed: int = Field(description="Jobs re-scored (those with a description)")
+    changed: int = Field(description="Re-scored jobs whose skills, fit score, or match changed")
+    no_longer_match: int = Field(description="Re-scored jobs that wouldn't match your skills now")
+    fetched: int = Field(description="Descriptions loaded from the job sites this time")
+    unavailable: int = Field(description="Jobs left as they were: their posting couldn't be loaded")
+    skills_source: Literal["saved", "default"]
 
 
 def _split(values: list[str] | None) -> tuple[str, ...]:
@@ -470,9 +516,15 @@ def _job_not_found(job_id: str) -> HTTPException:
     return HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} is not in the store")
 
 
+def _default_reassess(store: FirestoreJobStore, fetch: bool) -> "job_search.ReassessSummary":
+    # Looked up at call time, so tests can monkeypatch it.
+    return job_search.reassess_saved_jobs(store, fetch_missing=fetch)
+
+
 def create_app(
     manager: RunManager | None = None,
     store_factory: Callable[[], FirestoreJobStore] = _default_store,
+    reassess: Callable[[FirestoreJobStore, bool], "job_search.ReassessSummary"] = _default_reassess,
 ) -> FastAPI:
     manager = manager or RunManager()
     open_store = StoreProvider(store_factory)
@@ -508,6 +560,8 @@ def create_app(
         body = body or RunRequest()
         try:
             run = manager.start(body.sites, body.include_unmarked)
+        except ReassessInProgressError as busy:
+            return JSONResponse({"error": str(busy)}, status_code=status.HTTP_409_CONFLICT)
         except RunInProgressError as busy:
             return JSONResponse(
                 {"error": str(busy), "run": busy.run.to_dict()},
@@ -555,6 +609,32 @@ def create_app(
     ) -> dict[str, Any]:
         """Counts of the jobs matching the filters (all jobs without any)."""
         return job_stats(filter_jobs(_all_jobs(store), filters))
+
+    @app.post("/jobs/reassess", response_model=ReassessResult, dependencies=authorized)
+    def reassess_jobs(
+        fetch: bool = Query(
+            True,
+            description="Load descriptions not saved yet from the job sites (false: re-score "
+            "only the jobs whose description is already saved)",
+        ),
+        store: FirestoreJobStore = Depends(open_store),
+    ) -> Any:
+        """Re-score every saved job against your current skills (the dashboard's
+        Skills page): matched skills, fit score, and whether it still matches.
+        Jobs that no longer match are flagged, never deleted. The first time,
+        descriptions are loaded from the job sites, which can take a minute;
+        after that it's quick. The dashboard's Refresh button calls this."""
+        try:
+            with manager.reassessing():
+                summary = reassess(store, fetch)
+        except RunInProgressError as busy:
+            return JSONResponse(
+                {"error": f"{busy} It reassesses saved jobs when it finishes.", "run": busy.run.to_dict()},
+                status_code=status.HTTP_409_CONFLICT,
+            )
+        except ReassessInProgressError as busy:
+            return JSONResponse({"error": str(busy)}, status_code=status.HTTP_409_CONFLICT)
+        return asdict(summary)
 
     @app.get("/jobs/{job_id}", response_model=JobResponse, dependencies=authorized)
     def get_job(job_id: str, store: FirestoreJobStore = Depends(open_store)) -> dict[str, Any]:

@@ -2,7 +2,7 @@
  * Server-side access to the search API (backend/api.py, FastAPI).
  *
  * The browser never calls FastAPI directly: it calls this app's /api/runs
- * routes, which forward here. That keeps the browser on one origin (no CORS)
+ * and /api/jobs/reassess routes, which forward here. That keeps the browser on one origin (no CORS)
  * and keeps `IG_API_TOKEN` on the server, like the Firebase credentials.
  *
  *   IG_API_URL    where the API listens (default http://127.0.0.1:8000)
@@ -18,8 +18,13 @@ import { backendDir, loadBackendEnv, type Env } from "./config";
 export const API_URL_ENV_VAR = "IG_API_URL";
 export const API_TOKEN_ENV_VAR = "IG_API_TOKEN";
 export const DEFAULT_API_URL = "http://127.0.0.1:8000";
-/** Every call here is quick (starting a run returns immediately), so don't hang the page on a stuck API. */
+/** Most calls here are quick (starting a run returns immediately), so don't hang the page on a stuck API. */
 export const API_TIMEOUT_MS = 10_000;
+/**
+ * Reassessing saved jobs against your skills is quick once their descriptions
+ * are saved, but the first time it loads each one from its job site.
+ */
+export const REASSESS_TIMEOUT_MS = 5 * 60_000;
 
 export const START_API_HINT = "Start it with `cd backend && pipenv run uvicorn api:app` (see backend/README.md).";
 
@@ -60,9 +65,10 @@ function errorJson(message: string, status: number): Response {
  */
 export async function forwardToSearchApi(
   path: string,
-  init: { method?: string; body?: string } = {},
+  init: { method?: string; body?: string; timeoutMs?: number } = {},
   config: SearchApiConfig = currentConfig(),
 ): Promise<Response> {
+  const timeoutMs = init.timeoutMs ?? API_TIMEOUT_MS;
   const url = `${config.baseUrl}${path}`;
   const headers: Record<string, string> = { Accept: "application/json" };
   if (init.body !== undefined) headers["Content-Type"] = "application/json";
@@ -75,11 +81,11 @@ export async function forwardToSearchApi(
       headers,
       body: init.body,
       cache: "no-store",
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     if (error instanceof Error && error.name === "TimeoutError") {
-      return errorJson(`The search API at ${config.baseUrl} didn't answer within ${API_TIMEOUT_MS / 1000}s.`, 504);
+      return errorJson(`The search API at ${config.baseUrl} didn't answer within ${timeoutMs / 1000}s.`, 504);
     }
     return errorJson(`The search API isn't reachable at ${config.baseUrl}. ${START_API_HINT}`, 503);
   }

@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("createJobStore", () => {
   it("builds a local store from a local config", () => {
-    const store = createJobStore({ backend: "local", path: "/x.json", collections: { jobs: "jobs", runs: "runs" } });
+    const store = createJobStore({ backend: "local", path: "/x.json", collections: { jobs: "jobs", runs: "runs", settings: "settings" } });
     expect(store).toBeInstanceOf(LocalJsonJobStore);
   });
 
@@ -61,7 +61,7 @@ describe("createJobStore", () => {
       serviceAccount: undefined,
       credentialsPath: "/k.json",
       emulatorHost: undefined,
-      collections: { jobs: "jobs", runs: "runs" },
+      collections: { jobs: "jobs", runs: "runs", settings: "settings" },
     };
     expect(createJobStore(config)).toBe(fakeFirestoreStore);
     expect(createFirestoreStore).toHaveBeenCalledWith(config);

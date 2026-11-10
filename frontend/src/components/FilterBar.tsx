@@ -16,6 +16,8 @@ interface Props {
   remoteStatuses: RemoteStatus[];
   tracks: string[];
   refreshing: boolean;
+  /** Refresh is re-scoring the saved jobs against your skills (before reloading them). */
+  reassessing?: boolean;
   onFiltersChange: (filters: JobFilters) => void;
   onSortChange: (sort: SortKey) => void;
   onRefresh: () => void;
@@ -28,6 +30,7 @@ export function FilterBar({
   remoteStatuses,
   tracks,
   refreshing,
+  reassessing = false,
   onFiltersChange,
   onSortChange,
   onRefresh,
@@ -138,9 +141,15 @@ export function FilterBar({
         </Select>
       </div>
 
-      <Button variant="outline" onClick={onRefresh} disabled={refreshing} className="ml-auto">
+      <Button
+        variant="outline"
+        onClick={onRefresh}
+        disabled={refreshing}
+        className="ml-auto"
+        title="Re-score every saved job against your skills, then reload the list"
+      >
         <RefreshCwIcon className={refreshing ? "animate-spin" : undefined} />
-        {refreshing ? "Refreshing…" : "Refresh"}
+        {reassessing ? "Reassessing…" : refreshing ? "Refreshing…" : "Refresh"}
       </Button>
     </div>
   );

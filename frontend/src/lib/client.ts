@@ -6,7 +6,8 @@
  * /api/runs, which forwards to the FastAPI service in backend/api.py.
  */
 
-import type { Job, JobPatch, RunRequest, SearchRun, StoreInfo } from "./types";
+import type { SearchSkills, SkillSettings } from "./skills";
+import type { Job, JobPatch, ReassessSummary, RunRequest, SearchRun, StoreInfo } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -48,6 +49,30 @@ export async function patchJob(id: string, patch: JobPatch): Promise<Job> {
     body: JSON.stringify(patch),
   });
   return (await handle<{ job: Job }>(response)).job;
+}
+
+/**
+ * Re-score every saved job against your current skills (through the search
+ * API). Rejects with a 503 `ApiError` if the API isn't running, and a 409
+ * while a search is.
+ */
+export async function reassessJobs(): Promise<ReassessSummary> {
+  return handle<ReassessSummary>(await fetch("/api/jobs/reassess", { method: "POST" }));
+}
+
+/** Save your skill list; the next search uses it. Rejects with a 400 `ApiError` for a list that can't be used. */
+export async function saveSkills(skills: SearchSkills): Promise<SkillSettings> {
+  const response = await fetch("/api/skills", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(skills),
+  });
+  return handle<SkillSettings>(response);
+}
+
+/** Go back to the default skills in backend/job_search.py. */
+export async function resetSkills(): Promise<SkillSettings> {
+  return handle<SkillSettings>(await fetch("/api/skills", { method: "DELETE" }));
 }
 
 /** Start a search. Rejects with a 409 `ApiError` (whose body has the current `run`) if one is already going. */

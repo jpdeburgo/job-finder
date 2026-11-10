@@ -5,7 +5,7 @@ finds and records. It reads the same Firestore database (or the same
 `local_firestore.json` stand-in) the script writes, so there is nothing to
 sync: run the script, refresh the page.
 
-It has two pages, linked from the header:
+It has three pages, linked from the header:
 
 - **Home (`/`)** shows where your search stands. At the top are the **Run
   search** button and the result of the last run. Below that are totals for
@@ -17,6 +17,21 @@ It has two pages, linked from the header:
 - **Jobs (`/jobs`)** is the tracker. `/jobs?status=applied` opens it filtered
   to one status, and the address bar follows the status filter as you change
   it, so a reload or a bookmark keeps the view.
+- **Skills (`/skills`)** is where you choose what the search looks for. Add
+  skills (type one, or several separated by commas), move the ones that are
+  your main stack up to **Core skills** (the arrow buttons), rate how well
+  you know each one from 1 to 5 **stars** (click a star, or use the arrow
+  keys), remove the rest, and **Save skills**. The next search, whether
+  it's the daily run or **Run search**, uses your list. A Core-track job
+  needs at least two of your skills, one of them core; core skills count
+  twice as much toward the fit score, and stars scale that (3 stars, where
+  new skills start, counts as is). Stars never change which jobs match.
+  Saving also re-scores the jobs you've already saved, when the search API
+  is running; otherwise click **Refresh** on the Jobs page later. Until you
+  save, the page shows the defaults from `backend/job_search.py`, and
+  **Reset to defaults** goes back to them. See
+  [Your skills](../backend/README.md#your-skills) for what the list and the
+  stars change.
 
 In the tracker you can:
 
@@ -41,6 +56,16 @@ In the tracker you can:
 - Expand a row for every field, a **notes** editor, and all of the job's links:
   the Insight Global posting (to apply), the digest email it arrived in
   (Gmail), and a search for its title. Every link opens in a new tab.
+- **Refresh** re-scores every saved job against your current skills (the
+  Skills page), then reloads the list. Each job's matched skills and fit
+  score are updated, and jobs that wouldn't match any more get a **No longer
+  matches your skills** badge; the details drawer says why. Nothing is
+  deleted, and statuses and notes are left alone. A notice says what
+  changed. Re-scoring runs in the search API (`backend/api.py`), so it needs
+  the API running (see [Running a search](#running-a-search)); without it,
+  Refresh still reloads the list and the notice says how to start the API.
+  The first time, each job's description is loaded from its site, which can
+  take a minute; after that it's quick. Searches reassess saved jobs too.
 - **Run search** starts the search script right away instead of waiting for
   the daily cron job. The panel shows the run's progress and output and, when
   it finishes, what it found and emailed. New matches appear in the table
@@ -77,7 +102,7 @@ cd backend
 pipenv run uvicorn api:app --reload      # http://127.0.0.1:8000
 ```
 
-The browser never calls the API directly. It calls this app's `/api/runs`
+The browser never calls the API directly. It calls this app's `/api/runs` and `/api/jobs/reassess`
 routes, and the server forwards them. So there's no CORS to set up, and the
 API token stays on the server. Two optional variables, read like the others
 (from `frontend/.env.local`, else the script's `.env`):
@@ -127,7 +152,8 @@ Useful overrides:
 - `IG_BACKEND_DIR` — where the script lives, if you move it (default
   `../backend`).
 - `FIRESTORE_DATABASE`, `FIRESTORE_JOBS_COLLECTION`,
-  `FIRESTORE_RUNS_COLLECTION` — same meaning as in the script.
+  `FIRESTORE_RUNS_COLLECTION`, `FIRESTORE_SETTINGS_COLLECTION` — same
+  meaning as in the script.
 
 ### Real Firestore
 
@@ -159,18 +185,24 @@ src/
 │   ├── page.tsx                 home screen (/): reads the store, renders HomeOverview
 │   ├── jobs/page.tsx            the tracker (/jobs, ?status=...): reads the store, renders JobsDashboard
 │   ├── api/jobs/route.ts        GET  /api/jobs          → { store, jobs }
+│   ├── api/jobs/reassess/…      POST /api/jobs/reassess → forwarded to backend/api.py → summary
 │   ├── api/jobs/[id]/route.ts   GET  /api/jobs/:id      → { job }
 │   │                            PATCH /api/jobs/:id     { status?, notes? } → { job }
+│   ├── skills/page.tsx          the Skills page (/skills): reads your skill list, renders SkillsEditor
+│   ├── api/skills/route.ts      GET /api/skills, PUT { skills, core_skills }, DELETE (back to the defaults)
+│   │                            → { skills, core_skills, source, updated_at, defaults }
 │   └── api/runs/…               POST /api/runs, GET /api/runs/latest, GET /api/runs/:id
 │                                → forwarded to backend/api.py (FastAPI) → { run }
-├── components/                  client UI (HomeOverview, JobsDashboard, RunSearchPanel, SiteNav, JobRow, JobDetails drawer, ...)
+├── components/                  client UI (HomeOverview, JobsDashboard, RunSearchPanel, SkillsEditor (with its star rating), SiteNav, JobRow, JobDetails drawer, ...)
 │   └── ui/                      shadcn/ui primitives (button, select, sheet, table, ...)
 └── lib/
     ├── config.ts                IG_STATE_BACKEND / Firebase env resolution (port of job_store.py)
     ├── store/                   JobStore interface + Firestore (firebase-admin) and JSON-file implementations
     ├── status-update.ts         validates PATCH bodies; builds the same fields jobs_cli.py writes
+    ├── skills.ts                the default skills, validating a list (port of search_skills.py), editing helpers
     ├── search-api.ts            server-side forwarding to the search API (IG_API_URL / IG_API_TOKEN)
     ├── runs.ts                  describing search runs (pure functions)
+    ├── reassess.ts              describing a reassessment for the Refresh notice (pure functions)
     ├── overview.ts              home-screen totals and lists; /jobs?status= links (pure functions)
     ├── load-jobs.ts             the pages' store read, with config errors turned into a message
     ├── jobs.ts                  normalising, sorting, filtering, formatting (pure functions)
@@ -181,7 +213,7 @@ src/
   primitives, styled with Tailwind v4 — see [Component library](#component-library).
 - All database access happens **on the server** (route handlers and the
   server component) through the Firebase **Admin SDK** with the script's
-  service account. The browser only talks to `/api/jobs` and `/api/runs`; no Firebase
+  service account. The browser only talks to `/api/jobs`, `/api/skills`, and `/api/runs`; no Firebase
   credentials or config are shipped to the client.
 - The page is rendered at request time (`connection()` + `<Suspense>`), so
   it's never frozen into a static build.

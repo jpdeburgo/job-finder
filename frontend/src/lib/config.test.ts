@@ -58,7 +58,7 @@ describe("resolveStoreConfig", () => {
     expect(resolveStoreConfig({}, CWD)).toEqual({
       backend: "local",
       path: "/repo/backend/local_firestore.json",
-      collections: { jobs: "jobs", runs: "runs" },
+      collections: { jobs: "jobs", runs: "runs", settings: "settings" },
     });
   });
 
@@ -151,10 +151,16 @@ describe("resolveStoreConfig", () => {
     expect(resolveStoreConfig({ ...base, FIRESTORE_DATABASE: "(default)" }, CWD)).toMatchObject({ databaseId: undefined });
     expect(
       resolveStoreConfig(
-        { ...base, FIRESTORE_DATABASE: "jobs-db", FIRESTORE_JOBS_COLLECTION: "ig_jobs", FIRESTORE_RUNS_COLLECTION: "ig_runs" },
+        {
+          ...base,
+          FIRESTORE_DATABASE: "jobs-db",
+          FIRESTORE_JOBS_COLLECTION: "ig_jobs",
+          FIRESTORE_RUNS_COLLECTION: "ig_runs",
+          FIRESTORE_SETTINGS_COLLECTION: "ig_settings",
+        },
         CWD,
       ),
-    ).toMatchObject({ databaseId: "jobs-db", collections: { jobs: "ig_jobs", runs: "ig_runs" } });
+    ).toMatchObject({ databaseId: "jobs-db", collections: { jobs: "ig_jobs", runs: "ig_runs", settings: "ig_settings" } });
   });
 });
 

@@ -3,6 +3,7 @@
  */
 
 import { ConfigError } from "./config";
+import { InvalidSkillsError } from "./skills";
 import { InvalidPatchError } from "./status-update";
 import { JobNotFoundError } from "./store";
 
@@ -12,7 +13,9 @@ export function jsonResponse(body: unknown, status = 200): Response {
 
 /** Map a thrown error to a JSON error response with a sensible status code. */
 export function errorResponse(error: unknown): Response {
-  if (error instanceof InvalidPatchError) return jsonResponse({ error: error.message }, 400);
+  if (error instanceof InvalidPatchError || error instanceof InvalidSkillsError) {
+    return jsonResponse({ error: error.message }, 400);
+  }
   if (error instanceof JobNotFoundError) return jsonResponse({ error: error.message }, 404);
   if (error instanceof ConfigError) return jsonResponse({ error: error.message }, 500);
   const message = error instanceof Error ? error.message : "Unexpected error";

@@ -13,6 +13,7 @@ Always excluded (see EXCLUDED_NAMES / EXCLUDED_GLOBS):
 * version control: .git
 * dependencies and build output: node_modules, .next, .venv, __pycache__,
   coverage reports, previous archives, ...
+* your own notes in the project root: alignerr.txt (see PERSONAL_FILES)
 
 Standard library only, so it runs with any Python 3 and no virtualenv.
 """
@@ -73,6 +74,10 @@ EXCLUDED_GLOBS = (
 )
 # Names that would otherwise match a glob above but are safe and useful.
 ALWAYS_INCLUDED = frozenset({".env.example"})
+# Your own files, not part of the project: never archived. Paths relative to
+# the project root (a file of the same name elsewhere is archived as usual).
+# apply_update.py never overwrites or deletes them either.
+PERSONAL_FILES = ("alignerr.txt",)
 
 DEFAULT_ARCHIVE_PREFIX = "job-finder"
 
@@ -93,8 +98,10 @@ def iter_files(root: Path, extra_patterns: Iterable[str] = ()) -> Iterator[Path]
     for current, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if not is_excluded(d, extra))
         for filename in sorted(filenames):
-            if not is_excluded(filename, extra):
-                yield Path(current) / filename
+            path = Path(current) / filename
+            if is_excluded(filename, extra) or path.relative_to(root).as_posix() in PERSONAL_FILES:
+                continue
+            yield path
 
 
 def default_output_path(root: Path, now: datetime | None = None) -> Path:

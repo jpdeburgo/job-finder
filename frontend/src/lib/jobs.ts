@@ -98,6 +98,8 @@ export function normalizeJob(id: string, data: Record<string, unknown>): Job {
     fit_score: asNumber(data.fit_score),
     fit_breakdown: asNumberRecord(data.fit_breakdown),
     fit_reasons: asStringList(data.fit_reasons),
+    matches_skills: asBoolean(data.matches_skills),
+    skills_mismatch_reason: asString(data.skills_mismatch_reason),
     not_remote_reason: asString(data.not_remote_reason),
     status: asString(data.status) ?? "unknown",
     notes: asString(data.notes),

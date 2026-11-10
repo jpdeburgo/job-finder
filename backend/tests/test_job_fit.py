@@ -1,5 +1,7 @@
 """Tests for the fit score (job_fit.py) and how the search uses it."""
 
+import dataclasses
+
 import pytest
 
 import job_fit
@@ -228,7 +230,7 @@ def test_results_are_ordered_by_track_then_best_fit_then_newest(monkeypatch):
         def __init__(self, found):
             self.matches, self.searches, self.failed_terms = found, 1, []
 
-    monkeypatch.setattr(job_search, "_search_site_in_own_session", lambda site: Result(
+    monkeypatch.setattr(job_search, "_search_site_in_own_session", lambda site, tracks: Result(
         matches if site.name == "Insight Global" else []
     ))
 
@@ -297,3 +299,63 @@ def test_location_check_is_off_when_job_country_is_not_the_us(monkeypatch):
     monkeypatch.setattr(job_search, "JOB_COUNTRY", None)
 
     assert job_search._is_outside_job_country(_located("Remote - Canada")) is False
+
+
+# --- Proficiency ---------------------------------------------------------------------------
+
+
+def _rated(**levels):
+    """PROFILE with these skills rated (stars)."""
+    return dataclasses.replace(PROFILE, proficiency=tuple(levels.items()))
+
+
+def _skills_points(profile, description):
+    return score_fit(_posting("Data Engineer", description), profile).breakdown["skills"]
+
+
+def test_unrated_skills_score_exactly_as_before():
+    assert _skills_points(_rated(), "Python and SQL") == _skills_points(PROFILE, "Python and SQL")
+    assert _skills_points(_rated(Python=3, SQL=3), "Python and SQL") == _skills_points(PROFILE, "Python and SQL")
+
+
+@pytest.mark.parametrize(
+    ("stars", "points"),
+    # Python (core, 1) + SQL (other, 0.5), Python's weight times its factor; 55 points at weight 4.
+    [(1, round(55 * (0.25 + 0.5) / 4)), (2, round(55 * (0.6 + 0.5) / 4)), (3, round(55 * 1.5 / 4)),
+     (4, round(55 * (1.25 + 0.5) / 4)), (5, round(55 * (1.5 + 0.5) / 4))],
+)
+def test_stars_weight_a_skill(stars, points):
+    assert _skills_points(_rated(Python=stars), "Python and SQL") == points
+
+
+def test_expert_skills_reach_full_skill_points_sooner():
+    text = "Python, TypeScript, SQL and AWS"  # 1 + 1 + 0.5 + 0.5 = 3 of 4, unrated
+    assert _skills_points(PROFILE, text) == 41
+    assert _skills_points(_rated(Python=5, TypeScript=5, SQL=5, AWS=5), text) == 55  # 1.5 + 1.5 + 0.75 + 0.75
+
+
+def test_each_spelling_of_a_skill_has_its_own_stars():
+    profile = _rated(React=1, ReactJS=5)
+    # The spelling the posting uses decides...
+    assert _skills_points(profile, "React") == _skills_points(_rated(React=1), "React")
+    assert _skills_points(profile, "ReactJS") == _skills_points(_rated(ReactJS=5), "ReactJS")
+    # ...and a posting using both still counts the skill once, at the better rating.
+    assert _skills_points(profile, "React and ReactJS") == _skills_points(_rated(ReactJS=5), "ReactJS")
+    assert score_fit(_posting("Data Engineer", "React and ReactJS"), profile).reasons[0] == "Skills: React 5★ (1 core)"
+
+
+def test_the_title_bonus_is_scaled_down_for_skills_you_barely_know():
+    full = score_fit(_posting("Python Engineer"), _rated(Python=5))
+    part = score_fit(_posting("Python Engineer"), _rated(Python=1))
+    unrated = score_fit(_posting("Python Engineer"), PROFILE)
+
+    # 0 for "Engineer" (not a target role here) + the title bonus.
+    assert full.breakdown["role"] == unrated.breakdown["role"] == 15  # never more than the full bonus
+    assert part.breakdown["role"] == 4  # 15 x 0.25
+    assert "Title names your stack (Python 1★), part credit for your proficiency" in part.reasons
+    assert "Title names your stack (Python 5★)" in full.reasons
+
+
+def test_reasons_show_the_stars_you_set():
+    fit = score_fit(_posting("Data Engineer", "Python, SQL and AWS"), _rated(Python=5, SQL=1))
+    assert fit.reasons[0] == "Skills: Python 5★, SQL 1★, AWS (1 core)"

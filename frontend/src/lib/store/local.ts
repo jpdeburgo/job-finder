@@ -11,6 +11,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { LocalStoreConfig } from "../config";
 import { normalizeJob, sortNewestFirst } from "../jobs";
+import { SEARCH_SKILLS_DOCUMENT, type SearchSkills } from "../skills";
 import type { Job, StoreInfo } from "../types";
 import { JobNotFoundError, type JobStore } from "./types";
 
@@ -89,6 +90,34 @@ export class LocalJsonJobStore implements JobStore {
     data[this.config.collections.jobs] = docs;
     await this.save(data);
     return normalizeJob(id, updated);
+  }
+
+  async getSearchSkills(): Promise<Record<string, unknown> | null> {
+    const docs = (await this.load())[this.config.collections.settings] ?? {};
+    return docs[SEARCH_SKILLS_DOCUMENT] ?? null;
+  }
+
+  async saveSearchSkills(skills: SearchSkills, now: Date = new Date()): Promise<void> {
+    const data = await this.load();
+    const docs = data[this.config.collections.settings] ?? {};
+    docs[SEARCH_SKILLS_DOCUMENT] = {
+      skills: [...skills.skills],
+      core_skills: [...skills.core_skills],
+      proficiency: { ...skills.proficiency },
+      updated_at: encodeTimestamp(now),
+    };
+    data[this.config.collections.settings] = docs;
+    await this.save(data);
+  }
+
+  async resetSearchSkills(): Promise<void> {
+    const data = await this.load();
+    const docs = data[this.config.collections.settings];
+    if (!docs || !(SEARCH_SKILLS_DOCUMENT in docs)) return;
+    delete docs[SEARCH_SKILLS_DOCUMENT];
+    // Like Firestore, a collection with no documents left doesn't exist.
+    if (Object.keys(docs).length === 0) delete data[this.config.collections.settings];
+    await this.save(data);
   }
 
   // Internals ----------------------------------------------------------------
