@@ -312,26 +312,50 @@ export interface JobFilters {
   /** Case-insensitive match against title, company, skills, location, job type, notes, ID. */
   query: string;
   status: JobStatus | "all";
-  company: string | "all";
+  /** Companies to show (any case); none selected shows every company. */
+  companies: string[];
   remote: RemoteStatus | "all";
   track: string | "all";
+  /** Matched skills to look for (any case); none selected shows every job. */
+  skills: string[];
+  /** "any": jobs with at least one of `skills`; "all": jobs with every one. */
+  skillMatch: SkillMatch;
 }
+
+export type SkillMatch = "any" | "all";
 
 export const DEFAULT_FILTERS: JobFilters = {
   query: "",
   status: "all",
-  company: "all",
+  companies: [],
   remote: "all",
   track: "all",
+  skills: [],
+  skillMatch: "any",
 };
+
+/** Whether ``value`` is one of ``options``, in any case. */
+function isOneOf(value: string | null, options: string[]): boolean {
+  const wanted = value?.toLowerCase();
+  return wanted !== undefined && options.some((option) => option.toLowerCase() === wanted);
+}
+
+/** Whether a job's matched skills include the selected ones (any or all of them, in any case). */
+export function hasSkills(job: Pick<Job, "matched_skills">, skills: string[], match: SkillMatch): boolean {
+  if (skills.length === 0) return true;
+  const have = new Set(job.matched_skills.map((skill) => skill.toLowerCase()));
+  const wanted = skills.map((skill) => skill.toLowerCase());
+  return match === "all" ? wanted.every((skill) => have.has(skill)) : wanted.some((skill) => have.has(skill));
+}
 
 export function filterJobs(jobs: Job[], filters: JobFilters): Job[] {
   const query = filters.query.trim().toLowerCase();
   return jobs.filter((job) => {
     if (filters.status !== "all" && job.status !== filters.status) return false;
-    if (filters.company !== "all" && job.company !== filters.company) return false;
+    if (filters.companies.length > 0 && !isOneOf(job.company, filters.companies)) return false;
     if (filters.remote !== "all" && remoteStatus(job) !== filters.remote) return false;
     if (filters.track !== "all" && job.track !== filters.track) return false;
+    if (!hasSkills(job, filters.skills, filters.skillMatch)) return false;
     if (!query) return true;
     const haystack = [
       job.title,
@@ -368,11 +392,47 @@ export function distinctRemoteStatuses(jobs: Job[]): RemoteStatus[] {
   return (Object.keys(REMOTE_STATUS_INFO) as RemoteStatus[]).filter((status) => present.has(status));
 }
 
-/** Distinct company names, alphabetically, for the company filter. */
-export function distinctCompanies(jobs: Job[]): string[] {
-  const companies = new Set<string>();
-  for (const job of jobs) if (job.company) companies.add(job.company);
-  return [...companies].sort((a, b) => a.localeCompare(b));
+/** One choice in a multi-select filter, with how many jobs have it. */
+export interface FilterOption {
+  value: string;
+  count: number;
+}
+
+/** Each company once, alphabetically, with how many jobs it has, for the company filter. */
+export function distinctCompanies(jobs: Job[]): FilterOption[] {
+  const counts = new Map<string, number>();
+  for (const job of jobs) if (job.company) counts.set(job.company, (counts.get(job.company) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => a.value.localeCompare(b.value));
+}
+
+/**
+ * Every skill your jobs matched, with how many matched it, most common first
+ * (then A-Z), for the skills filter. Spellings that differ only in case
+ * ("Python", "python", saved before and after a change to your list) are one
+ * skill, shown the way most jobs have it.
+ */
+export function distinctSkills(jobs: Job[]): FilterOption[] {
+  const counts = new Map<string, { count: number; spellings: Map<string, number> }>();
+  for (const job of jobs) {
+    const seen = new Set<string>();
+    for (const skill of job.matched_skills) {
+      const key = skill.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const entry = counts.get(key) ?? { count: 0, spellings: new Map<string, number>() };
+      entry.count += 1;
+      entry.spellings.set(skill, (entry.spellings.get(skill) ?? 0) + 1);
+      counts.set(key, entry);
+    }
+  }
+  return [...counts.values()]
+    .map(({ count, spellings }) => ({
+      value: [...spellings.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0],
+      count,
+    }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
 }
 
 /** Distinct track names in first-seen order, for the track filter. */

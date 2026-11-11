@@ -111,19 +111,30 @@ class CandidateProfile:
     proficiency: tuple[tuple[str, int], ...] = ()
 
     def level(self, skill: str) -> int:
-        """Your stars for ``skill``. Each spelling (React, ReactJS) has its own."""
-        return dict(self.proficiency).get(skill, DEFAULT_PROFICIENCY)
+        """Your stars for ``skill`` (any case). Each spelling (React, ReactJS) has its own."""
+        levels = {name.lower(): stars for name, stars in self.proficiency}
+        return levels.get(skill.lower(), DEFAULT_PROFICIENCY)
 
 
 def proficiency_factor(level: int) -> float:
     return PROFICIENCY_FACTORS.get(level, 1.0)
 
 
+def _alias_group(skill: str, profile: CandidateProfile) -> tuple[str, ...]:
+    """The spellings of ``skill`` (React, ReactJS), in any case; just itself
+    if it has no others."""
+    return next(
+        (group for group in profile.skill_aliases if skill.lower() in {name.lower() for name in group}),
+        (skill,),
+    )
+
+
 def _found_level(skill: str, found: list[str], profile: CandidateProfile) -> int:
     """Stars for a skill as the posting names it: the spelling it uses, or
     the best-rated one if it uses several (React and ReactJS)."""
-    group = next((g for g in profile.skill_aliases if skill in g), (skill,))
-    return max(profile.level(name) for name in found if name in group) if skill in found else profile.level(skill)
+    group = {name.lower() for name in _alias_group(skill, profile)}
+    levels = [profile.level(name) for name in found if name.lower() in group]
+    return max(levels) if levels else profile.level(skill)
 
 
 def _with_stars(skill: str, level: int) -> str:
@@ -151,12 +162,15 @@ def fit_label(score: float | None) -> str:
 
 
 def _canonical_skills(skills: list[str], profile: CandidateProfile) -> list[str]:
-    """Collapse spellings of one skill (React / ReactJS) into the first one listed."""
+    """Collapse spellings of one skill (React / ReactJS, in any case: "react",
+    "REACTJS") into the first one in ``SKILL_ALIASES`` order, as you wrote it."""
     canonical: list[str] = []
     for skill in skills:
-        group = next((g for g in profile.skill_aliases if skill in g), (skill,))
-        name = next((alias for alias in group if alias in skills), skill)
-        if name not in canonical:
+        group = _alias_group(skill, profile)
+        name = next(
+            (mine for alias in group for mine in skills if mine.lower() == alias.lower()), skill
+        )
+        if name.lower() not in {seen.lower() for seen in canonical}:
             canonical.append(name)
     return canonical
 
@@ -166,16 +180,16 @@ def _skill_part(posting: Posting, profile: CandidateProfile) -> tuple[float, lis
     mentioned = [skill for skill in profile.skills if contains_phrase(text, skill)]
     found = _canonical_skills(mentioned, profile)
     levels = {skill: _found_level(skill, mentioned, profile) for skill in found}
-    core = set(profile.core_skills)
+    core = {skill.lower() for skill in profile.core_skills}
     weight = sum(
-        (CORE_SKILL_WEIGHT if skill in core else SUPPORTING_SKILL_WEIGHT)
+        (CORE_SKILL_WEIGHT if skill.lower() in core else SUPPORTING_SKILL_WEIGHT)
         * proficiency_factor(levels[skill])
         for skill in found
     )
     points = SKILL_POINTS * min(1.0, weight / SKILL_POINTS_FULL_AT)
     if found:
-        core_found = [s for s in found if s in core]
-        other = [s for s in found if s not in core]
+        core_found = [s for s in found if s.lower() in core]
+        other = [s for s in found if s.lower() not in core]
         detail = ", ".join(_with_stars(s, levels[s]) for s in core_found + other)
         reason = f"Skills: {detail} ({len(core_found)} core)"
     else:

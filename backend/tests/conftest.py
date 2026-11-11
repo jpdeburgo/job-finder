@@ -3,12 +3,25 @@
 import pytest
 
 import job_search
+from job_sites import InsightGlobalSite
 
 
 def pytest_configure(config):
     config.addinivalue_line(
         "markers", "real_boards: search the boards in job_boards.py instead of the test pair"
     )
+    config.addinivalue_line(
+        "markers", "job_pages: let Insight Global read job pages (off otherwise; see below)"
+    )
+
+
+@pytest.fixture(autouse=True)
+def no_job_pages(request, monkeypatch):
+    """Insight Global reads each matching job's page for On-Site. The fake
+    sessions in most tests only serve its API, so that's off unless a test is
+    marked ``job_pages``."""
+    if not request.node.get_closest_marker("job_pages"):
+        monkeypatch.setattr(InsightGlobalSite, "READ_JOB_PAGES", False)
 
 
 @pytest.fixture(autouse=True)

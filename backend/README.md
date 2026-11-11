@@ -116,6 +116,29 @@ a label ("Onsite", "Hybrid - Dallas, TX", "100% Onsite") counts, and so does
 recruiter shorthand: "Onsite in Atlanta", "(Hybrid)", "will sit onsite",
 "onsite 3x a week", "No remote.".
 
+**Insight Global is read more strictly.** Its remote flag is wrong often
+enough that any mention of On-Site (or Onsite, ON SITE) about where you'd
+work makes one of its jobs not remote (`onsite_mention` in `job_sites.py`),
+however it's worded: "Location: Miramar, FL - On-Site (Mon-Fri)", "ONSITE",
+"this is an On-Site role". It's looked for in three places:
+
+- the description;
+- every short field in Insight Global's data, not just the ones named for
+  the work arrangement (`"locationDisplay": "Miramar, FL - On-Site"`);
+- the job's own page (`https://insightglobal.com/jobs/<id>`), for each job
+  that otherwise matches (one extra request per match). Only the job's part
+  of the page counts, from its title to the end of its description, so the
+  site's menus and footer and the "similar jobs" listed under it don't. If
+  the pages turn out to be filled in by the browser (their HTML has no job
+  in it), the page check stops for the rest of the run and says so. Set
+  `InsightGlobalSite.READ_JOB_PAGES = False` in `job_sites.py` to skip it.
+
+Mentions that aren't about where you'd work still don't count: "on-site
+gym", "occasional on-site visits", "on-site for onboarding", "On-Site: No",
+"Remote or On-Site", "on-site and remote support". Other sites keep the
+rules above. A job dropped this way says why in the dashboard, e.g. "Listed
+as remote, but its job page says "On-Site"".
+
 To see how one job is read, and why, check it by URL or by its saved job ID:
 
 ```bash
@@ -124,7 +147,7 @@ pipenv run python job_search.py --check-remote insight-global-<id>     # a saved
 ```
 
 It prints the verdict, every field in the site's data, and the description
-lines about where you'd work. If a job says on-site and the verdict is
+lines about where you'd work (for Insight Global, the job page's too). If a job says on-site and the verdict is
 "remote", that output shows exactly what the check missed. Each job dropped this way
 is printed with the words that gave it away, e.g.
 
@@ -212,8 +235,11 @@ Skills (saved in the dashboard; * = core): Python*, Go*, Kubernetes, SQL
 What the list changes:
 
 - **Matching.** A Core-track job needs `MIN_SKILL_MATCHES` (2) of your
-  skills, at least one of them core. Matching ignores case and only matches
-  whole words, so "Java" doesn't match "JavaScript".
+  skills, at least one of them core. Matching only matches whole words, so
+  "Java" doesn't match "JavaScript". Case never matters, anywhere: "python"
+  on your list matches "Python" and "PYTHON" in a posting, scores the same,
+  and can't be added twice; "react" and "REACTJS" are still one skill in
+  the fit score (`SKILL_ALIASES`).
 - **Fit score.** Core skills count 1 and the others 0.5, each scaled by your
   stars for it (see [Proficiency](#proficiency) and [Fit score](#fit-score)).
 - **Unfamiliar tech.** A skill you add that's in `NON_RESUME_TITLE_TECH`

@@ -359,3 +359,26 @@ def test_the_title_bonus_is_scaled_down_for_skills_you_barely_know():
 def test_reasons_show_the_stars_you_set():
     fit = score_fit(_posting("Data Engineer", "Python, SQL and AWS"), _rated(Python=5, SQL=1))
     assert fit.reasons[0] == "Skills: Python 5★, SQL 1★, AWS (1 core)"
+
+
+# --- Case never matters ------------------------------------------------------------------
+
+
+def test_skills_in_any_case_score_the_same():
+    posting = _posting("React Engineer", "We use react and REACTJS with PYTHON and sql.")
+    as_listed = score_fit(posting, PROFILE)
+    lowercase = score_fit(posting, dataclasses.replace(
+        PROFILE,
+        skills=tuple(s.lower() for s in PROFILE.skills),
+        core_skills=tuple(s.lower() for s in PROFILE.core_skills),
+    ))
+
+    assert lowercase.score == as_listed.score
+    assert lowercase.breakdown == as_listed.breakdown
+    # React and ReactJS still count once, however they're written.
+    assert lowercase.reasons[0] == "Skills: python, react, sql (2 core)"
+
+
+def test_stars_are_found_in_any_case():
+    profile = dataclasses.replace(PROFILE, proficiency=(("PYTHON", 5),))
+    assert profile.level("python") == 5 == profile.level("Python")

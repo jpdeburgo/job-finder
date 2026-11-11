@@ -5,16 +5,27 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { REMOTE_STATUS_INFO, SORT_OPTIONS, type JobFilters, type RemoteStatus, type SortKey } from "@/lib/jobs";
+import {
+  REMOTE_STATUS_INFO,
+  SORT_OPTIONS,
+  type JobFilters,
+  type FilterOption,
+  type RemoteStatus,
+  type SortKey,
+} from "@/lib/jobs";
 import { JOB_STATUSES, STATUS_INFO, type JobStatus } from "@/lib/types";
+import { MultiSelectFilter } from "./MultiSelectFilter";
 
 interface Props {
   filters: JobFilters;
   sort: SortKey;
-  companies: string[];
+  /** Companies the jobs are from, with counts (see `distinctCompanies`). */
+  companies: FilterOption[];
   /** Remote statuses present in the data (see `distinctRemoteStatuses`). */
   remoteStatuses: RemoteStatus[];
   tracks: string[];
+  /** Skills the jobs matched, with counts (see `distinctSkills`). */
+  skills?: FilterOption[];
   refreshing: boolean;
   /** Refresh is re-scoring the saved jobs against your skills (before reloading them). */
   reassessing?: boolean;
@@ -29,6 +40,7 @@ export function FilterBar({
   companies,
   remoteStatuses,
   tracks,
+  skills = [],
   refreshing,
   reassessing = false,
   onFiltersChange,
@@ -73,19 +85,16 @@ export function FilterBar({
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="filter-company">Company</Label>
-        <Select value={filters.company} onValueChange={(value) => update({ company: value })}>
-          <SelectTrigger id="filter-company" className="w-[170px]">
-            <SelectValue>{filters.company === "all" ? "All companies" : filters.company}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All companies</SelectItem>
-            {companies.map((company) => (
-              <SelectItem key={company} value={company}>
-                {company}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <MultiSelectFilter
+          id="filter-company"
+          className="w-[200px]"
+          options={companies}
+          selected={filters.companies}
+          onChange={(selected) => update({ companies: selected })}
+          noneLabel="All companies"
+          emptyLabel="No companies yet."
+          clearLabel="Clear companies"
+        />
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -123,6 +132,21 @@ export function FilterBar({
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="filter-skills">Skills</Label>
+        <MultiSelectFilter
+          id="filter-skills"
+          className="w-[200px]"
+          options={skills}
+          selected={filters.skills}
+          onChange={(selected) => update({ skills: selected })}
+          match={{ value: filters.skillMatch, onChange: (skillMatch) => update({ skillMatch }), plural: "skills" }}
+          noneLabel="Any skill"
+          emptyLabel="No skills matched yet."
+          clearLabel="Clear skills"
+        />
       </div>
 
       <div className="flex flex-col gap-1.5">

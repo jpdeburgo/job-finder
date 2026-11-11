@@ -198,24 +198,35 @@ describe("filtering and sorting", () => {
     expect(rowIds()).toHaveLength(3);
   });
 
-  it("filters by company, listing each company once", async () => {
+  it("filters by one or several companies, listing each company once", async () => {
     const user = setupUser();
-    renderDashboard();
-    const trigger = screen.getByRole("combobox", { name: "Company" });
+    renderDashboard([...jobs, makeJob({ id: "nvidia", company: "NVIDIA", title: "CUDA Engineer" })]);
+    const trigger = screen.getByRole("button", { name: "Company" });
     expect(trigger).toHaveTextContent("All companies");
 
     await user.click(trigger);
-    const options = await screen.findAllByRole("option");
-    expect(options.map((option) => option.textContent)).toEqual(["All companies", "Accenture", "Insight Global"]);
-    await user.click(screen.getByRole("option", { name: "Accenture" }));
+    const options = await screen.findAllByRole("menuitemcheckbox");
+    // Alphabetical, with how many jobs each has; no any/all choice (a job has one company).
+    expect(options.map((option) => option.getAttribute("aria-label"))).toEqual([
+      "Accenture, 1 job", "Insight Global, 2 jobs", "NVIDIA, 1 job",
+    ]);
+    expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Accenture, 1 job" }));
     expect(rowIds()).toEqual(["job-row-java"]);
     expect(trigger).toHaveTextContent("Accenture");
 
-    await choose(user, trigger, "Insight Global");
-    expect(rowIds()).toEqual(["job-row-react", "job-row-python"]);
+    // The menu stays open: pick another.
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "NVIDIA, 1 job" }));
+    expect(rowIds()).toEqual(["job-row-nvidia", "job-row-java"]); // newest first
+    expect(trigger).toHaveTextContent("Accenture or NVIDIA");
 
-    await choose(user, trigger, "All companies");
-    expect(rowIds()).toHaveLength(3);
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Accenture, 1 job" }));
+    expect(rowIds()).toEqual(["job-row-nvidia"]);
+
+    await user.click(screen.getByRole("menuitem", { name: "Clear companies" }));
+    expect(rowIds()).toHaveLength(4);
+    expect(trigger).toHaveTextContent("All companies");
   });
 
   const remoteOptions = async (user: ReturnType<typeof setupUser>) => {
@@ -259,7 +270,9 @@ describe("filtering and sorting", () => {
   it("combines the company filter with the others", async () => {
     const user = setupUser();
     renderDashboard();
-    await choose(user, screen.getByRole("combobox", { name: "Company" }), "Insight Global");
+    await user.click(screen.getByRole("button", { name: "Company" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Insight Global, 2 jobs" }));
+    await user.keyboard("{Escape}");
     await choose(user, screen.getByRole("combobox", { name: "Status" }), "Applied");
     expect(rowIds()).toEqual(["job-row-python"]);
     await choose(user, screen.getByRole("combobox", { name: "Status" }), "Skipped");
@@ -271,6 +284,38 @@ describe("filtering and sorting", () => {
     renderDashboard();
     await choose(user, screen.getByRole("combobox", { name: "Track" }), "Java growth track (entry-level / lower bar)");
     expect(rowIds()).toEqual(["job-row-java"]);
+  });
+
+  it("filters by several skills: any of them, or all", async () => {
+    const user = setupUser();
+    renderDashboard();
+    const trigger = screen.getByRole("button", { name: "Skills" });
+    expect(trigger).toHaveTextContent("Any skill");
+
+    await user.click(trigger);
+    const options = await screen.findAllByRole("menuitemcheckbox");
+    // Every matched skill once, with how many jobs have it, most common first.
+    expect(options.map((option) => option.getAttribute("aria-label"))).toEqual([
+      "AWS, 1 job", "Java, 1 job", "Python, 1 job", "React, 1 job", "TypeScript, 1 job",
+    ]);
+
+    // The menu stays open while you pick.
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Python, 1 job" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Java, 1 job" }));
+    expect(screen.getByRole("menuitemcheckbox", { name: "Python, 1 job" })).toHaveAttribute("aria-checked", "true");
+    expect(rowIds()).toEqual(["job-row-python", "job-row-java"]);
+    expect(trigger).toHaveTextContent("Python or Java");
+
+    await user.click(screen.getByRole("menuitemradio", { name: "All of the selected skills" }));
+    expect(screen.getByText("No jobs match the current filters.")).toBeInTheDocument();
+    expect(trigger).toHaveTextContent("Python and Java");
+
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Java, 1 job" }));
+    expect(rowIds()).toEqual(["job-row-python"]);
+
+    await user.click(screen.getByRole("menuitem", { name: "Clear skills" }));
+    expect(rowIds()).toEqual(["job-row-react", "job-row-python", "job-row-java"]);
+    expect(trigger).toHaveTextContent("Any skill");
   });
 
   it("sorts by title", async () => {

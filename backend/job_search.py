@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -447,6 +447,11 @@ def _contains_skill(text: str, skill: str) -> bool:
     return contains_phrase(text, skill)
 
 
+def _any_same_skill(wanted: Iterable[str], found: Iterable[str]) -> bool:
+    """Whether any skill in ``found`` is one of ``wanted``, in any case."""
+    return bool({skill.lower() for skill in wanted} & {skill.lower() for skill in found})
+
+
 def score_posting(posting: Posting, skills: tuple[str, ...]) -> list[str]:
     haystack = f"{posting.title} {posting.description or ''}"
     return [skill for skill in skills if _contains_skill(haystack, skill)]
@@ -827,7 +832,7 @@ def evaluate_posting(posting: Posting, site: JobSite, track: SearchTrack) -> Job
     matched_skills = score_posting(posting, track.skills)
     if len(matched_skills) < track.minimum_matches:
         return None
-    if track.required_skills and not set(track.required_skills) & set(matched_skills):
+    if track.required_skills and not _any_same_skill(track.required_skills, matched_skills):
         return None
 
     min_years = extract_min_years(posting)
@@ -994,6 +999,21 @@ def search_site(
             existing = best.get(posting.job_id)
             if match and (existing is None or match.score > existing.score):
                 best[posting.job_id] = match
+
+    # A last check on the jobs that would be kept as remote. On most sites it
+    # costs nothing; Insight Global reads each one's job page for On-Site.
+    if site.remote_only:
+        verified = _run_parallel(
+            [(job_id, lambda posting=descriptions[job_id]: site.verify_remote(session, posting))
+             for job_id, match in best.items() if match.is_remote is not False],
+            workers,
+        )
+        for job_id, why, _ in verified:
+            if why:
+                match = best.pop(job_id)
+                onsite[job_id] = why
+                log(f"  {site.name}: {match.title!r} ({job_id}) is marked remote, but "
+                    f"{_describe_evidence(why)}; treating it as not remote.")
     return SiteSearchResult(
         list(best.values()), len(searches), failed_terms, onsite, set(descriptions) | set(onsite)
     )
@@ -1450,6 +1470,33 @@ def _short_fields(payload: Any, prefix: str = "") -> list[str]:
     return lines
 
 
+def _verified(site: JobSite, session: requests.Session, posting: Posting) -> Posting:
+    """``posting``, marked not remote if the site's last check (verify_remote:
+    Insight Global's job page) says it isn't."""
+    if not site.remote_only or posting.is_remote is False:
+        return posting
+    why = site.verify_remote(session, posting)
+    return dataclasses.replace(posting, is_remote=False, remote_note=why) if why else posting
+
+
+def _page_lines(site: JobSite, session: requests.Session, posting: Posting) -> list[str]:
+    """For --check-remote: what the job's page says (Insight Global only)."""
+    check = getattr(site, "check_job_page", None)
+    if check is None or not getattr(site, "reads_job_pages", False):
+        return []
+    try:
+        page = check(session, posting)
+    except requests.RequestException as error:
+        return [f"Couldn't load the job page: {type(error).__name__}: {error}"]
+    if not page.lines:
+        return [f"The job page ({page.url}) doesn't include the job in its HTML (the browser "
+                "fills it in), so only the site's data above was checked."]
+    mentions = [line for line in page.lines if ARRANGEMENT_WORDS.search(line)]
+    lines = [f"Job page ({page.url}), lines about where you'd work:" if mentions
+             else f"The job page ({page.url}) doesn't mention on-site, hybrid, office, or remote."]
+    return lines + [f"  | {line[:200]}" for line in mentions[:15]]
+
+
 def explain_posting(site: JobSite, posting: Posting, payload: Any) -> tuple[Posting, list[str]]:
     """The remote verdict for one job, and why, as printable lines."""
     checked, why, _ = check_work_arrangement(posting)
@@ -1494,7 +1541,10 @@ def check_remote(targets: list[str], store: FirestoreJobStore | None = None) -> 
                 print(f"Couldn't check it: {type(error).__name__}: {error}")
                 status = 1
                 continue
+            posting = _verified(site, session, posting)
             for line in explain_posting(site, posting, payload)[1]:
+                print(line)
+            for line in _page_lines(site, session, posting):
                 print(line)
     print("\nIf a job says on-site but the verdict is remote, send this output so the check "
           "can learn its wording.")
@@ -1535,11 +1585,12 @@ def recheck_saved_jobs(
 
         def load(doc_id: str, data: dict[str, Any], site: JobSite) -> Any:
             try:
-                return site.lookup(
+                posting, payload = site.lookup(
                     session, str(data["url"]), doc_id[len(site.id_prefix):], title=str(data.get("title") or "")
                 )
             except UnsupportedSiteError as error:
                 return error
+            return _verified(site, session, _fill_from_search(site, posting, data)), payload
 
         results = _run_parallel(
             [((doc_id, data, site), lambda d=doc_id, v=data, s=site: load(d, v, s))
@@ -1559,7 +1610,7 @@ def recheck_saved_jobs(
         posting, payload = result
         if posting.description:
             texts[doc_id] = posting.description  # for reassessing it against your skills
-        checked, lines = explain_posting(site, _fill_from_search(site, posting, data), payload)
+        checked, lines = explain_posting(site, posting, payload)
         if checked.is_remote is False:
             fixes[doc_id] = _describe_evidence(checked.remote_note or "the site marks it hybrid or on-site")
             print(f"  {site.name}: {data.get('title')!r} ({doc_id}) isn't remote: {fixes[doc_id]}.")
@@ -1618,7 +1669,7 @@ def skills_mismatch(posting: Posting, track: SearchTrack, matched: list[str]) ->
             return "it doesn't mention any of your skills"
         return (f"it mentions only {', '.join(matched)}; a match needs "
                 f"{track.minimum_matches} of your skills")
-    if track.required_skills and not set(track.required_skills) & set(matched):
+    if track.required_skills and not _any_same_skill(track.required_skills, matched):
         return f"it mentions {', '.join(matched)}, but none of your core skills"
     return None
 

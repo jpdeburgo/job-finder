@@ -6,6 +6,7 @@ import {
   countByStatus,
   distinctCompanies,
   distinctRemoteStatuses,
+  distinctSkills,
   remoteStatus,
   distinctTracks,
   filterJobs,
@@ -24,6 +25,8 @@ import {
   sortNewestFirst,
   toIsoString,
   trackLabel,
+  hasSkills,
+  type JobFilters,
 } from "./jobs";
 
 describe("toIsoString", () => {
@@ -288,12 +291,17 @@ describe("filtering", () => {
     expect(filterJobs(jobs, DEFAULT_FILTERS).map((j) => j.id)).toEqual(["r", "p"]);
   });
 
-  it("filters by company", () => {
+  it("filters by one or several companies, in any case", () => {
     const accenture = makeJob({ id: "a", title: "Java Developer", company: "Accenture" });
-    const mixed = [react, python, accenture];
-    expect(filterJobs(mixed, { ...DEFAULT_FILTERS, company: "Accenture" }).map((j) => j.id)).toEqual(["a"]);
-    expect(filterJobs(mixed, { ...DEFAULT_FILTERS, company: "Insight Global" }).map((j) => j.id)).toEqual(["r", "p"]);
-    expect(filterJobs(mixed, { ...DEFAULT_FILTERS, company: "Nobody" })).toEqual([]);
+    const nvidia = makeJob({ id: "n", company: "NVIDIA" });
+    const unknown = makeJob({ id: "u", company: null });
+    const mixed = [react, python, accenture, nvidia, unknown];
+    const ids = (companies: string[]) => filterJobs(mixed, { ...DEFAULT_FILTERS, companies }).map((j) => j.id);
+    expect(ids([])).toEqual(["r", "p", "a", "n", "u"]);
+    expect(ids(["Accenture"])).toEqual(["a"]);
+    expect(ids(["Insight Global"])).toEqual(["r", "p"]);
+    expect(ids(["accenture", "Nvidia"])).toEqual(["a", "n"]);
+    expect(ids(["Nobody"])).toEqual([]);
     // Search matches the company name too.
     expect(filterJobs(mixed, { ...DEFAULT_FILTERS, query: "accent" }).map((j) => j.id)).toEqual(["a"]);
   });
@@ -319,14 +327,17 @@ describe("filtering", () => {
     ).toEqual(["remote", "unmarked", "not_remote"]);
   });
 
-  it("distinctCompanies lists each company once, alphabetically, skipping unknowns", () => {
+  it("distinctCompanies lists each company once, alphabetically, with its job count, skipping unknowns", () => {
     const companies = distinctCompanies([
       makeJob({ company: "Insight Global" }),
       makeJob({ company: "Accenture" }),
       makeJob({ company: "Insight Global" }),
       makeJob({ company: null }),
     ]);
-    expect(companies).toEqual(["Accenture", "Insight Global"]);
+    expect(companies).toEqual([
+      { value: "Accenture", count: 1 },
+      { value: "Insight Global", count: 2 },
+    ]);
   });
 
   it("filters by status and track", () => {
@@ -356,5 +367,50 @@ describe("fit score", () => {
     ]);
     expect(fitLabel(null)).toBeNull();
     expect(FIT_LABELS.map((band) => band.min)).toEqual([75, 60, 40, 0]);
+  });
+});
+
+describe("the skills filter", () => {
+  const jobs = [
+    makeJob({ id: "both", matched_skills: ["Python", "React"] }),
+    makeJob({ id: "python", matched_skills: ["python", "SQL"] }), // saved before a change of case
+    makeJob({ id: "react", matched_skills: ["React"] }),
+    makeJob({ id: "none", matched_skills: [] }),
+  ];
+  const ids = (filters: Partial<JobFilters>) => filterJobs(jobs, { ...DEFAULT_FILTERS, ...filters }).map((job) => job.id);
+
+  it("shows every job when no skill is picked", () => {
+    expect(ids({ skills: [] })).toEqual(["both", "python", "react", "none"]);
+    expect(ids({ skills: [], skillMatch: "all" })).toEqual(["both", "python", "react", "none"]);
+  });
+
+  it("keeps jobs with any of the picked skills, in any case", () => {
+    expect(ids({ skills: ["Python"] })).toEqual(["both", "python"]);
+    expect(ids({ skills: ["PYTHON", "react"] })).toEqual(["both", "python", "react"]);
+  });
+
+  it("or only jobs with all of them", () => {
+    expect(ids({ skills: ["Python", "React"], skillMatch: "all" })).toEqual(["both"]);
+    expect(ids({ skills: ["Python", "Go"], skillMatch: "all" })).toEqual([]);
+  });
+
+  it("combines with the other filters", () => {
+    expect(ids({ skills: ["React"], query: "both" })).toEqual(["both"]);
+  });
+
+  it("hasSkills works on its own", () => {
+    expect(hasSkills({ matched_skills: ["Go"] }, [], "all")).toBe(true);
+    expect(hasSkills({ matched_skills: ["Go"] }, ["go", "Rust"], "any")).toBe(true);
+    expect(hasSkills({ matched_skills: ["Go"] }, ["go", "Rust"], "all")).toBe(false);
+  });
+
+  it("lists each skill once with how many jobs have it, most common first", () => {
+    expect(distinctSkills([...jobs, makeJob({ id: "more", matched_skills: ["Python", "Python", "AWS"] })])).toEqual([
+      { value: "Python", count: 3 }, // "python" is the same skill; most jobs spell it "Python"
+      { value: "React", count: 2 },
+      { value: "AWS", count: 1 },
+      { value: "SQL", count: 1 },
+    ]);
+    expect(distinctSkills([])).toEqual([]);
   });
 });

@@ -188,12 +188,13 @@ _NOT_MONTHLY = r"(?!\s*(?:a|per|each|every|/)\s*(?:month|quarter|year))"
 # Words after "onsite" that make it describe something else ("onsite teams").
 # A label answered in the negative: "Onsite: No", "Hybrid - N/A".
 _NOT_NEGATED = r"(?!\s*(?:no|none|n/?a|not|never|optional)\b)"
-_NOT_ABOUT_YOU = (
-    r"(?!\s+(?:teams?|staff|colleagues|employees|personnel|support|customers?|clients?|"
+_OTHER_THINGS = (
+    r"(?:teams?|staff|colleagues|employees|personnel|support|customers?|clients?|"
     r"partners?|engineers?|technicians?|resources?|counterparts|stakeholders|users|events?|"
     r"meetings?|visits?|interviews?|training|gym|cafeteria|amenities|parking|childcare|"
-    r"health|clinic|services?|equipment|hardware|installations?|deployments?)\b)"
+    r"health|clinic|services?|equipment|hardware|installations?|deployments?)"
 )
+_NOT_ABOUT_YOU = rf"(?!\s+{_OTHER_THINGS}\b)"
 ONSITE_DESCRIPTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -317,6 +318,65 @@ def _sentence_around(text: str, start: int, end: int) -> tuple[str, str]:
 def _snippet(text: str, start: int, end: int) -> str:
     before, after = _sentence_around(text, start, end)
     return re.sub(r"\s+", " ", f"{before[-25:]}{text[start:end]}{after[:25]}").strip()
+
+
+# Insight Global: any mention of On-Site counts (InsightGlobalSite). Its
+# recruiters write it every which way ("Location: Miramar, FL - On-Site
+# (Mon-Fri)", "ONSITE", "this is an On-Site role w/ ..."), and the careful
+# patterns above miss many of them. "On Site" with a space only as a label
+# (capitalized), so "focus on site reliability" isn't one.
+_ON_SITE_WORD = re.compile(r"(?<![A-Za-z])(?:(?i:on-site|onsite)|On Site|ON SITE)(?![A-Za-z])")
+_OTHER_THING_AFTER = re.compile(rf"^\s*[-/]?\s*{_OTHER_THINGS}\b", re.IGNORECASE)
+# "On-Site: No", "Onsite - N/A"
+_NEGATED_AFTER = re.compile(r"^\s*[:\-–]?\s*(?:no|none|n/?a|not|never|optional)\b", re.IGNORECASE)
+# A choice: "Remote or On-Site", "on-site and remote support", "On-Site/Remote"
+_CHOICE_BEFORE = re.compile(r"\bremote\s*(?:and|or|/|and/or|&|\+)\s*$", re.IGNORECASE)
+_CHOICE_AFTER = re.compile(r"^\s*(?:and|or|/|and/or|&|\+)\s*(?:fully\s+|100%\s+)?remote\b", re.IGNORECASE)
+
+
+def onsite_mention(text: str | None) -> str | None:
+    """A quote of the first mention of On-Site / Onsite in ``text`` that says
+    where you'd work, or None.
+
+    Stricter than ``onsite_evidence``: the word alone is enough, unless it's
+    softened ("occasional on-site visits", "on-site for onboarding"), negated
+    ("On-Site: No", "not onsite"), about something else ("on-site gym",
+    "onsite support"), or a choice ("Remote or On-Site").
+    """
+    text = str(text or "")
+    for match in _ON_SITE_WORD.finditer(text):
+        before, after = _sentence_around(text, match.start(), match.end())
+        if (
+            _SOFTENING_BEFORE.search(f"{before} {match.group(0)}")
+            or _SOFTENING_AFTER.search(after)
+            or _OTHER_THING_AFTER.match(after)
+            or _NEGATED_AFTER.match(after)
+            or _CHOICE_BEFORE.search(before)
+            or _CHOICE_AFTER.match(after)
+        ):
+            continue
+        return _snippet(text, match.start(), match.end())
+    return None
+
+
+# Parts of a page that are never the job: scripts, styles, the <head>, icons.
+_PAGE_NOISE = re.compile(
+    r"<(head|script|style|noscript|svg|template)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL
+)
+
+
+# On a page, every tag but text formatting separates things: a badge
+# (<span>On-Site</span>), a menu link, or a title stands on its own line.
+_PAGE_SEPARATOR_TAG = re.compile(
+    r"<(?!/?(?:b|i|em|strong|u|small|sup|sub|code|mark|abbr|font)\b)[^>]*>", re.IGNORECASE
+)
+
+
+def page_to_text(page: str) -> str:
+    """The visible text of an HTML page, one element per line."""
+    return html_to_text(
+        _PAGE_SEPARATOR_TAG.sub("\n", _PAGE_NOISE.sub("\n", str(page or ""))), keep_lines=True
+    )
 
 
 def onsite_evidence(title: str, description: str | None = "", location: str = "") -> str | None:
@@ -548,11 +608,112 @@ class JobSite:
         when it can't be loaded (say, the posting has closed)."""
         return self.lookup(session, url, native_id, title)[0].description or ""
 
+    def verify_remote(self, session: requests.Session, posting: Posting) -> str | None:
+        """A last check, with the description loaded, on a job about to count
+        as remote: why it isn't (e.g. 'its job page says "On-Site"'), or None.
+        Costs a request on sites that do it (Insight Global reads the job's
+        page), so the search only asks for jobs that otherwise match."""
+        return None
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.name!r}, {self.search_url!r})"
 
 
 # --- Insight Global ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PageCheck:
+    """What a job's page says about where you'd work (``check_job_page``)."""
+
+    url: str
+    # The job's part of the page, line by line: from its title to the end of
+    # its description. Empty when the page's HTML doesn't include the job.
+    lines: list[str]
+    # 'its job page says "..."' when it mentions On-Site, else None.
+    evidence: str | None
+
+
+def _normalized(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+# Lines after a job's title that are still about it, when its description
+# can't be found on the page.
+JOB_SECTION_MAX_LINES = 25
+# Lines in a row that aren't its text (headings, links, bullets) before the
+# description counts as over.
+DESCRIPTION_GAP_LINES = 4
+
+
+def job_section(page_text: str, title: str, description: str = "") -> list[str]:
+    """The lines of a page that are about one job: from its title to the end
+    of its description (or ``JOB_SECTION_MAX_LINES`` lines, if the
+    description can't be found on the page). Empty if the title isn't there.
+
+    A page line belongs to the description when it's part of the
+    description's text (the page may break it up differently, around links);
+    the description ends where such lines stop coming, so the "similar jobs"
+    after it aren't included.
+    """
+    lines = [line for line in page_text.split("\n") if line.strip()]
+    wanted = _normalized(title)
+    if not wanted:
+        return []
+    titles = [
+        index for index, line in enumerate(lines)
+        if _normalized(line) == wanted or (wanted in _normalized(line) and len(line) <= len(title) + 40)
+    ]
+    if not titles:
+        return []
+    text = _normalized(description)
+    in_description = [
+        index for index, line in enumerate(lines)
+        if text and len(line.strip()) >= 20 and _normalized(line) in text and index > titles[0]
+    ]
+    if not in_description:
+        return lines[titles[0]:titles[0] + JOB_SECTION_MAX_LINES]
+    first = in_description[0]
+    # The title closest above the description (not a breadcrumb far above it).
+    start = max(index for index in titles if index < first)
+    last = first
+    for index in in_description[1:]:
+        if index - last > DESCRIPTION_GAP_LINES:
+            break  # far below the description: another job's text
+        last = index
+    return lines[start:last + 1]
+
+
+def onsite_in_fields(payload: Any, skip: Iterable[str] = ()) -> str | None:
+    """A short field in a site's data that mentions On-Site ('location =
+    "Miramar, FL - On-Site"'), for sites whose remote flag can't be trusted.
+    Long text, identifiers, and titles (read on their own) are left out."""
+    skipped = {name.lower() for name in skip}
+
+    def visit(value: Any, depth: int, path: str, field: str) -> str | None:
+        """``path`` names the field for the quote ("location.display");
+        ``field`` is its own name (a list's items share their list's)."""
+        if depth > 4:
+            return None
+        if isinstance(value, dict):
+            for key, item in value.items():
+                name = str(key)
+                if name.lower() not in skipped:
+                    found = visit(item, depth + 1, f"{path}.{name}" if path else name, name)
+                    if found:
+                        return found
+        elif isinstance(value, list):
+            for item in value:
+                found = visit(item, depth + 1, path, field)
+                if found:
+                    return found
+        elif isinstance(value, str) and field and not IDENTIFIER_FIELD.search(field):
+            text = html_to_text(value)
+            if len(text) <= 120 and onsite_mention(text):
+                return f'{path} = "{text}"'
+        return None
+
+    return visit(payload, 0, "", "")
 
 
 def _format_job_type(value: Any) -> str:
@@ -567,11 +728,23 @@ class InsightGlobalSite(JobSite):
     The API lives on the same host as the search page: ``/all/jobs`` for
     search and ``/all/jobs/<id>/details`` for a description. Job pages are
     ``/jobs/<id>``.
+
+    Its remote flag is often wrong, so any mention of On-Site (Onsite, ON
+    SITE) that says where you'd work makes a job not remote (``onsite_mention``):
+    in the description, in any short field of the site's data, or on the job's
+    page (``verify_remote``, only for jobs that otherwise match).
     """
 
     kind = "insight-global"
     newest_first = True  # requested with sort=postedDate,desc
     PAGE_SIZE = 50  # the API silently caps page size at 50
+    # Job pages whose HTML doesn't include their job, in a row with none that
+    # did, before the page check stops for the run: the pages are filled in
+    # by the browser, so there is nothing to read in them.
+    PAGE_MISSES_BEFORE_GIVING_UP = 3
+    # Read each matching job's page for On-Site (one request per job). Off:
+    # only the site's data is checked.
+    READ_JOB_PAGES = True
 
     def __init__(self, search_url: str, *, remote_only: bool = True, contract_only: bool = True):
         self.name = "Insight Global"
@@ -580,6 +753,11 @@ class InsightGlobalSite(JobSite):
         self.contract_only = contract_only
         self.api_url = urljoin(search_url, "/all/jobs")
         self.job_page_url = urljoin(search_url, "/jobs/")
+        # See verify_remote: set once the pages turn out not to include their jobs.
+        self._pages_unreadable = False
+        self._page_lock = threading.Lock()
+        self._page_hits = 0
+        self._page_misses = 0
 
     def build_search_params(self, term: str, page: int) -> dict[str, Any]:
         params: dict[str, Any] = {
@@ -635,6 +813,8 @@ class InsightGlobalSite(JobSite):
         status, why = structured_remote(record, skip=("workRemote",))
         if status is False:
             is_remote = False
+        elif mention := onsite_in_fields(record, skip=("workRemote", "description")):
+            status, why, is_remote = False, mention, False
         return Posting(
             job_id=f"{self.id_prefix}{requisition_id}",
             title=str(record.get("jobTitle") or "").strip() or "Unknown title",
@@ -666,6 +846,13 @@ class InsightGlobalSite(JobSite):
             return dataclasses.replace(
                 posting, description=description, is_remote=False, remote_note=why
             )
+        # Any On-Site, in the description or a field, wins over a remote flag.
+        snippet = onsite_mention(description)
+        mention = f'description: "{snippet}"' if snippet else onsite_in_fields(payload, skip=("description",))
+        if mention:
+            return dataclasses.replace(
+                posting, description=description, is_remote=False, remote_note=mention
+            )
         if posting.is_remote is None and status is True:
             return dataclasses.replace(posting, description=description, is_remote=True)
         return dataclasses.replace(posting, description=description)
@@ -682,6 +869,52 @@ class InsightGlobalSite(JobSite):
         return html_to_text(
             self.details_payload(session, requisition_id).get("description"), keep_lines=True
         )
+
+    def check_job_page(self, session: requests.Session, posting: Posting) -> "PageCheck":
+        """Read a job's page (``/jobs/<id>``) for On-Site.
+
+        Only the job's own part of the page counts, from its title to the end
+        of its description, so the site's menus and footer and the "similar
+        jobs" next to it don't. Raises ``requests.RequestException`` when the
+        page can't be loaded.
+        """
+        native_id = posting.detail_key or posting.job_id.removeprefix(self.id_prefix)
+        url = self.build_job_url(native_id)
+        response = session.get(url, headers={"Accept": "text/html"}, timeout=REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        lines = job_section(page_to_text(response.text), posting.title, posting.description or "")
+        snippet = onsite_mention("\n".join(lines)) if lines else None
+        return PageCheck(url, lines, f'its job page says "{snippet}"' if snippet else None)
+
+    @property
+    def reads_job_pages(self) -> bool:
+        """Whether matching jobs' pages are read (READ_JOB_PAGES, until they
+        turn out not to include their jobs)."""
+        return self.READ_JOB_PAGES and not self._pages_unreadable
+
+    def verify_remote(self, session: requests.Session, posting: Posting) -> str | None:
+        if not self.reads_job_pages or posting.is_remote is False:
+            return None
+        try:
+            page = self.check_job_page(session, posting)
+        except requests.RequestException:
+            return None  # can't tell: the site's data stands
+        with self._page_lock:
+            if page.lines:
+                self._page_hits += 1
+                self._page_misses = 0
+            else:
+                self._page_misses += 1
+                if (
+                    self.reads_job_pages
+                    and not self._page_hits
+                    and self._page_misses >= self.PAGE_MISSES_BEFORE_GIVING_UP
+                ):
+                    self._pages_unreadable = True
+                    log(f"  {self.name}: its job pages don't include the job in their HTML (the "
+                        "browser fills them in), so they aren't read for On-Site for the rest of "
+                        "this run. The site's data still is.")
+        return page.evidence
 
     def find_search_record(
         self, session: requests.Session, requisition_id: str, title: str

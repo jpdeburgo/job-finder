@@ -12,6 +12,7 @@ import {
   countByStatus,
   distinctCompanies,
   distinctRemoteStatuses,
+  distinctSkills,
   distinctTracks,
   filterJobs,
   sortJobs,
@@ -69,6 +70,7 @@ export function JobsDashboard({
   const companies = useMemo(() => distinctCompanies(jobs), [jobs]);
   const remoteStatuses = useMemo(() => distinctRemoteStatuses(jobs), [jobs]);
   const tracks = useMemo(() => distinctTracks(jobs), [jobs]);
+  const skillOptions = useMemo(() => distinctSkills(jobs), [jobs]);
   const visible = useMemo(() => sortJobs(filterJobs(jobs, filters), sort), [jobs, filters, sort]);
   // The page is clamped here, so a page that emptied (say, the last job on it
   // changed status and left the filter) shows the last page that has jobs.
@@ -221,6 +223,7 @@ export function JobsDashboard({
         companies={companies}
         remoteStatuses={remoteStatuses}
         tracks={tracks}
+        skills={skillOptions}
         refreshing={refreshing}
         reassessing={reassessing}
         onFiltersChange={updateFilters}

@@ -344,3 +344,16 @@ def test_the_fit_score_uses_your_ratings_but_matching_doesnt():
     assert matches["expert"].fit_score > matches["default"].fit_score > matches["beginner"].fit_score
     assert matches["expert"].fit_reasons[0] == "Skills: Go 5★, Kubernetes 5★, PostgreSQL 5★ (1 core)"
     assert matches["default"].fit_reasons[0] == "Skills: Go, Kubernetes, PostgreSQL (1 core)"
+
+
+def test_a_list_typed_in_any_case_finds_and_scores_the_same_jobs():
+    posting = _posting("React Engineer", "We use react and REACTJS with Python and SQL.")
+    typed = ["Python", "React", "ReactJS", "SQL"]
+    results = [
+        job_search.evaluate_posting(posting, IG, job_search.build_tracks(clean_skills(skills, skills[:3]))[0])
+        for skills in (typed, [s.lower() for s in typed], [s.upper() for s in typed])
+    ]
+
+    assert all(result is not None for result in results)  # a core skill matched in every case
+    assert {result.fit_score for result in results} == {results[0].fit_score}
+    assert [len(result.matched_skills) for result in results] == [4, 4, 4]

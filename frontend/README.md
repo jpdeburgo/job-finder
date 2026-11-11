@@ -37,7 +37,7 @@ In the tracker you can:
 
 - See every tracked job with its company, fit score, track, matched skills,
   salary, posted date, and when the script last saw it. Search, filter by
-  status/company/remote/track, and sort (**Best fit** puts the jobs that suit
+  status/remote/track and by **company** and **skills**, and sort (**Best fit** puts the jobs that suit
   you best first; the details drawer explains each score, see
   [Fit score](../backend/README.md#fit-score)). Results come 25 to a page
   (or 50 or 100: **Rows per page** under the table). A new filter, sort, or
@@ -46,6 +46,14 @@ In the tracker you can:
   filter only offers what your jobs have: "Remote", plus "Remote not stated"
   for jobs saved by `job_search.py --include-unmarked`, plus "Not remote" only
   if remote-only was turned off for a site.
+- The **Company** filter is a multi-select: tick any number of companies
+  (each shows how many jobs it has) to see jobs from any of them; **Clear
+  companies** shows them all again.
+- The **Skills** filter is a multi-select too: tick any number of the skills
+  your jobs matched (each shows how many jobs have it, most common first)
+  and choose whether a job needs **any** of them or **all** of them. Case
+  doesn't matter, and the menu stays open while you pick; **Clear skills**
+  empties it.
 - Mark a job **On-site**, **Hybrid**, or **Remote** when the site gets it
   wrong (the **Work arrangement** menu in the details drawer). Your choice
   overrides the site's everywhere, including the Remote filter, and searches
