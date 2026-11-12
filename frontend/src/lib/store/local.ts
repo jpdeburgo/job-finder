@@ -11,6 +11,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { LocalStoreConfig } from "../config";
 import { normalizeJob, sortNewestFirst } from "../jobs";
+import { RESUME_DOCUMENT } from "../resume";
 import { SEARCH_SKILLS_DOCUMENT, type SearchSkills } from "../skills";
 import type { Job, StoreInfo } from "../types";
 import { JobNotFoundError, type JobStore } from "./types";
@@ -118,6 +119,11 @@ export class LocalJsonJobStore implements JobStore {
     // Like Firestore, a collection with no documents left doesn't exist.
     if (Object.keys(docs).length === 0) delete data[this.config.collections.settings];
     await this.save(data);
+  }
+
+  async getResume(): Promise<Record<string, unknown> | null> {
+    const docs = (await this.load())[this.config.collections.settings] ?? {};
+    return docs[RESUME_DOCUMENT] ?? null;
   }
 
   // Internals ----------------------------------------------------------------

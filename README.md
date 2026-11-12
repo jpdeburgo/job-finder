@@ -5,7 +5,7 @@ A personal job-hunting pipeline in two parts:
 | Directory | What it is | Docs |
 | --- | --- | --- |
 | [`backend/`](backend/) | Python script that searches the careers pages in `JOB_SEARCH_URLS` (`backend/job_boards.py`: Insight Global contract roles, Accenture, and 18 company Workday/Greenhouse boards; more Workday, Greenhouse, and Lever boards can be added by URL) for matching remote roles, ranks each by a 0-100 fit score, emails you a digest through the Gmail API, and records every match in Firebase Firestore (or a local JSON stand-in). Includes a CLI for updating statuses and a FastAPI app (`api.py`) so the dashboard can start a search. Runs daily on Render as a cron job. | [backend/README.md](backend/README.md) |
-| [`frontend/`](frontend/) | Next.js + shadcn/ui dashboard over the same database: a home screen with where your search stands (totals, newest matches, recent activity) and a button to run a search on demand, a Skills page to edit the skills the search looks for, plus a tracker to browse every job, search/filter/sort, change statuses, mark jobs applied, keep notes, and jump to the posting, the digest email, or an Insight Global search in a new tab. | [frontend/README.md](frontend/README.md) |
+| [`frontend/`](frontend/) | Next.js + shadcn/ui dashboard over the same database: a home screen with where your search stands (totals, newest matches, recent activity) and a button to run a search on demand, a Skills page to edit the skills the search looks for, a Resume page that works out your skills and years of experience from your resume (by parsing it, or with AI) and adds them to that list, plus a tracker to browse every job, search/filter/sort, change statuses, mark jobs applied, keep notes, and jump to the posting, the digest email, or an Insight Global search in a new tab. | [frontend/README.md](frontend/README.md) |
 
 Both halves choose the database the same way, from the same environment
 variables (`IG_STATE_BACKEND`, `GOOGLE_APPLICATION_CREDENTIALS`, ...). With
@@ -67,7 +67,9 @@ python3 archive.py --exclude local_firestore.json -o ~/Desktop/job-finder.zip
 ```
 
 `local_firestore.json` (your tracking data) is included by default since it
-contains no secrets; use `--exclude` as above to leave it out.
+contains no secrets; use `--exclude` as above to leave it out. If you've
+uploaded your resume on the dashboard while using the local file, its text
+(with your contact details) is in there too.
 
 ### Applying an updated zip
 

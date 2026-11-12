@@ -1,6 +1,9 @@
 Description:
-I want to be able to edit the skills that I am searching for in the UI
+We will be adding resume ingestion and skill detection. Next I want to implement adding a resume and being able to determine the skills and years of experience that a user has based off of their resume.
 
+I want to be able to do this by using AI and by just parsing the document and determining the skills and years of experience. 
+
+If we can not find a free AI integration then we will just have to determine that it worked based off of the manual parsing version
 
 Completeion:
 Run these commands in two different terminals:
@@ -8,7 +11,6 @@ cd backend/ && pipenv install && pipenv run python job_search.py --local && pipe
 
 cd frontend/ && npm install && npm run dev
 
-You can judge this is complete by going to the settings (or wherever I create the option to do it since there is not settings page yet), setting your skills, clicking on the search button and the criteria for the search changes. The best fit should also change based on your skills
+You can judge this is complete by uploading your resume and seeing if the skills and years of experience were properly 
 
 Next Prompts:
-Next, can you allow users to rate their skills

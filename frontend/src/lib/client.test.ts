@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, fetchJobs, fetchLatestRun, fetchRun, patchJob, runFromError, startRun } from "./client";
+import {
+  ApiError,
+  analyzeResume,
+  deleteResume,
+  fetchJobs,
+  fetchLatestRun,
+  fetchRun,
+  patchJob,
+  runFromError,
+  startRun,
+  uploadResume,
+} from "./client";
 
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
@@ -83,5 +94,46 @@ describe("search runs", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ run }));
     expect(await fetchRun("a/b")).toEqual(run);
     expect(fetchMock).toHaveBeenLastCalledWith("/api/runs/a%2Fb", { cache: "no-store" });
+  });
+});
+
+describe("resume", () => {
+  const saved = { filename: "cv.pdf", file_type: "pdf", text: "Python", uploaded_at: "2026-11-11T09:30:00+00:00", analyses: {} };
+
+  it("uploads a file as a form, and pasted text as JSON", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ resume: saved }));
+    const file = new File(["%PDF-1.4"], "cv.pdf", { type: "application/pdf" });
+
+    expect(await uploadResume(file)).toMatchObject({ filename: "cv.pdf", text: "Python" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/resume");
+    expect(init.method).toBe("POST");
+    expect((init.body as FormData).get("file")).toBe(file);
+
+    await uploadResume("Jane Doe\nPython");
+    expect(fetchMock.mock.calls[1]).toEqual([
+      "/api/resume",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Jane Doe\nPython" }) },
+    ]);
+  });
+
+  it("analyzes with a method, and deletes", async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ resume: saved }));
+    await analyzeResume("ai");
+    expect(fetchMock).toHaveBeenCalledWith("/api/resume/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: "ai" }),
+    });
+    fetchMock.mockImplementation(async () => jsonResponse({ resume: null }));
+    await deleteResume();
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/resume", { method: "DELETE" });
+  });
+
+  it("passes on why it failed", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: "AI isn't set up: add ANTHROPIC_API_KEY" }, 503));
+    await expect(analyzeResume("ai")).rejects.toMatchObject({ status: 503, message: "AI isn't set up: add ANTHROPIC_API_KEY" });
+    fetchMock.mockResolvedValue(jsonResponse({ resume: null }));
+    await expect(uploadResume("x")).rejects.toMatchObject({ status: 502 });
   });
 });

@@ -11,6 +11,7 @@ import { applicationDefault, cert, getApps, initializeApp, type App } from "fire
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import type { FirestoreStoreConfig } from "../config";
 import { normalizeJob, sortNewestFirst } from "../jobs";
+import { RESUME_DOCUMENT } from "../resume";
 import { SEARCH_SKILLS_DOCUMENT, type SearchSkills } from "../skills";
 import type { Job, StoreInfo } from "../types";
 import { JobNotFoundError, type JobStore } from "./types";
@@ -104,6 +105,11 @@ export class FirestoreJobStore implements JobStore {
   async resetSearchSkills(): Promise<void> {
     // Deleting a missing document is a no-op in Firestore.
     await this.searchSkills.delete();
+  }
+
+  async getResume(): Promise<Record<string, unknown> | null> {
+    const snapshot = await this.db.collection(this.config.collections.settings).doc(RESUME_DOCUMENT).get();
+    return snapshot.exists ? (snapshot.data() ?? {}) : null;
   }
 }
 

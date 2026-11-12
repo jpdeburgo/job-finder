@@ -27,6 +27,14 @@ Endpoints::
     PATCH /jobs/{job_id}  {"status": "applied", "notes": "...", "work_arrangement": "on_site"}
                           -> the updated job
 
+    GET    /resume         your saved resume and what was read from it -> {"resume": ... | null, "ai": ...}
+    POST   /resume         upload one, replacing the last, and parse it -> {"resume": ...}
+                           {"filename": "cv.pdf", "content_base64": "..."} or {"text": "..."}
+                           422 if it can't be read (not PDF/.docx/text, no text in it, over 5 MB)
+    POST   /resume/analyze {"method": "ai" | "parse"}: read the saved resume again -> {"resume": ...}
+                           404 without one; 503 "ai" without an API key; 502/504 if the AI fails
+    DELETE /resume         forget it -> {"resume": null}
+
 Only one search runs at a time, and run history lives in memory, so start
 the server with a single worker (uvicorn's default). Set ``IG_API_TOKEN`` to
 require ``Authorization: Bearer <token>`` on everything but ``/health``; do
@@ -35,6 +43,8 @@ that before exposing the API beyond your own machine.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import io
 import os
@@ -51,10 +61,12 @@ from typing import Any, Callable, Literal, TextIO
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import job_search
+import resume
+import resume_ai
 from job_queries import (
     REMOTE_STATUSES,
     JobFilters,
@@ -521,10 +533,83 @@ def _default_reassess(store: FirestoreJobStore, fetch: bool) -> "job_search.Reas
     return job_search.reassess_saved_jobs(store, fetch_missing=fetch)
 
 
+# --- Resume --------------------------------------------------------------------------
+
+# Base64 of a resume.MAX_RESUME_BYTES file, with room for padding.
+MAX_RESUME_BASE64 = (resume.MAX_RESUME_BYTES * 4) // 3 + 8
+
+
+class ResumeUpload(BaseModel):
+    """A resume file (base64, as the dashboard sends it) or pasted text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(default="", max_length=255, description="e.g. jane-doe.pdf; decides nothing if the content says otherwise")
+    content_base64: str | None = Field(
+        default=None, max_length=MAX_RESUME_BASE64, description="The file: PDF, Word (.docx), or plain text"
+    )
+    text: str | None = Field(
+        default=None, max_length=resume.MAX_RESUME_CHARS, description="Or the resume's text, pasted"
+    )
+
+    @model_validator(mode="after")
+    def _one_of_them(self) -> "ResumeUpload":
+        if (self.content_base64 is None) == (self.text is None):
+            raise ValueError("send either content_base64 (a file) or text, not both")
+        return self
+
+
+class ResumeAnalyzeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: Literal["parse", "ai"] = Field(
+        description='"ai": read it with the configured language model; "parse": read it with rules again '
+        "(say, after changing your skills)"
+    )
+
+
+def _jsonable(value: Any) -> Any:
+    """A stored document with its timestamps as ISO strings."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _resume_error(error: Exception) -> JSONResponse:
+    """The response for a resume that couldn't be read or analyzed."""
+    if isinstance(error, resume.ResumeError):
+        code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    elif isinstance(error, resume.NoResumeError):
+        code = status.HTTP_404_NOT_FOUND
+    elif isinstance(error, resume.ResumeChangedError):
+        code = status.HTTP_409_CONFLICT
+    elif isinstance(error, resume_ai.AiNotConfiguredError):
+        code = status.HTTP_503_SERVICE_UNAVAILABLE
+    elif isinstance(error, resume_ai.AiReadError):
+        code = status.HTTP_504_GATEWAY_TIMEOUT if error.timed_out else status.HTTP_502_BAD_GATEWAY
+    else:  # pragma: no cover - only the errors above are passed in
+        raise error
+    return JSONResponse({"error": str(error)}, status_code=code)
+
+
+RESUME_ERRORS = (
+    resume.ResumeError,
+    resume.NoResumeError,
+    resume.ResumeChangedError,
+    resume_ai.AiNotConfiguredError,
+    resume_ai.AiReadError,
+)
+
+
 def create_app(
     manager: RunManager | None = None,
     store_factory: Callable[[], FirestoreJobStore] = _default_store,
     reassess: Callable[[FirestoreJobStore, bool], "job_search.ReassessSummary"] = _default_reassess,
+    ai_reader: "resume.AiReader | None" = None,
 ) -> FastAPI:
     manager = manager or RunManager()
     open_store = StoreProvider(store_factory)
@@ -635,6 +720,45 @@ def create_app(
         except ReassessInProgressError as busy:
             return JSONResponse({"error": str(busy)}, status_code=status.HTTP_409_CONFLICT)
         return asdict(summary)
+
+    @app.get("/resume", dependencies=authorized)
+    def get_resume(store: FirestoreJobStore = Depends(open_store)) -> dict[str, Any]:
+        """Your saved resume (its text and each reading of it), or null; and
+        whether reading it with AI is set up."""
+        return {"resume": _jsonable(store.load_resume()), "ai": resume_ai.ai_status()}
+
+    @app.post("/resume", dependencies=authorized)
+    def upload_resume(body: ResumeUpload, store: FirestoreJobStore = Depends(open_store)) -> Any:
+        """Save a resume, replacing the one before (and its readings), and
+        parse it: the skills it mentions, with years for each, and your total
+        years of experience. Read it with AI afterwards with POST /resume/analyze."""
+        try:
+            data = None
+            if body.content_base64 is not None:
+                try:
+                    data = base64.b64decode(body.content_base64, validate=True)
+                except (binascii.Error, ValueError):
+                    raise resume.ResumeError("The file didn't arrive intact (content_base64 isn't base64).") from None
+            document = resume.save_resume(store, body.filename, data=data, text=body.text)
+        except RESUME_ERRORS as error:
+            return _resume_error(error)
+        return {"resume": _jsonable(document)}
+
+    @app.post("/resume/analyze", dependencies=authorized)
+    def analyze_resume(body: ResumeAnalyzeRequest, store: FirestoreJobStore = Depends(open_store)) -> Any:
+        """Read the saved resume again, with AI or by parsing, and keep that
+        reading next to the others. With AI this takes a few seconds to a minute."""
+        try:
+            document = resume.analyze_saved_resume(store, body.method, ai_reader)
+        except RESUME_ERRORS as error:
+            return _resume_error(error)
+        return {"resume": _jsonable(document)}
+
+    @app.delete("/resume", dependencies=authorized)
+    def delete_resume(store: FirestoreJobStore = Depends(open_store)) -> dict[str, Any]:
+        """Forget your resume and its readings. Your skill list isn't touched."""
+        store.delete_resume()
+        return {"resume": None}
 
     @app.get("/jobs/{job_id}", response_model=JobResponse, dependencies=authorized)
     def get_job(job_id: str, store: FirestoreJobStore = Depends(open_store)) -> dict[str, Any]:

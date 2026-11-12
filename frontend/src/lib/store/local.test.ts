@@ -209,4 +209,20 @@ describe("LocalJsonJobStore", () => {
       expect(Object.keys(readDb())).toEqual(["settings"]);
     });
   });
+
+  describe("resume", () => {
+    it("is null until backend/resume.py saves one", async () => {
+      expect(await new LocalJsonJobStore(config()).getResume()).toBeNull();
+      fs.rmSync(dbPath);
+      expect(await new LocalJsonJobStore(config()).getResume()).toBeNull();
+    });
+
+    it("reads settings/resume as stored, next to the skill list", async () => {
+      const resume = { filename: "cv.pdf", text: "Python", analyses: {} };
+      fs.writeFileSync(dbPath, JSON.stringify({ ...readDb(), settings: { resume, search_skills: { skills: ["Go"] } } }));
+      expect(await new LocalJsonJobStore(config()).getResume()).toEqual(resume);
+      const other = new LocalJsonJobStore(config({ collections: { jobs: "jobs", runs: "runs", settings: "ig_settings" } }));
+      expect(await other.getResume()).toBeNull();
+    });
+  });
 });

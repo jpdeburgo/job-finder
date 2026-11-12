@@ -20,6 +20,11 @@ Global, Accenture, and 18 company Workday/Greenhouse boards; see
   single skill that do not explicitly require more than three years of
   experience.
 
+Upload your resume on the dashboard's **Resume** page (or with `resume.py`)
+to see the skills and years of experience it shows, worked out by parsing it
+or with AI, and add the skills it finds to your list (see
+[Your resume](#your-resume)).
+
 International/LATAM/India/Nearshore-titled postings are always filtered out
 (the feed has no country, and these listings carry placeholder US locations),
 as are listings tagged Alaska whose city isn't actually in Alaska (a recurring
@@ -316,6 +321,97 @@ can't be loaded; that job keeps its old score and the summary counts it. A
 search's own reassessment only uses descriptions already saved, and the
 re-check of saved jobs (`RECHECK_SAVED_JOBS`) saves the ones it loads.
 
+## Your resume
+
+Upload your resume on the dashboard's **Resume** page (`/resume`) and it
+works out **the skills you have** and **your years of experience**, two ways:
+
+| Reading | How | Needs |
+| --- | --- | --- |
+| **Parsed** | Rules (`resume_parser.py`): finds the work history's date ranges and the skills in `skill_catalog.py` (about 170, with their spellings) plus every skill on your list. Runs on every upload, instantly. | Nothing |
+| **AI** | A language model (`resume_ai.py`) reads the work history and skills; better with unusual layouts, and at telling an employer ("Oracle", "Salesforce") from a skill. Skills on your own list are always included when the resume names them, even if the model passes over one it doesn't recognize (a note says so). Click **Read with AI**. | An API key (below) |
+
+Both give the same things, so you can compare them on the page:
+
+- **Years of experience**: the dates of the jobs in your work history added
+  up, with **overlapping jobs counted once** (a freelance gig alongside a
+  full-time job doesn't double those years). Education, projects, and dates
+  inside bullet points don't count. A range given in years only ("2016 -
+  2019") runs from January to December. With no dates at all, the years the
+  resume states ("8+ years of experience") are used, and when the two
+  disagree by 2 years or more, a note says so.
+- **Skills**, each with **years**: the time covered by the jobs whose
+  entries mention it (overlaps counted once), and when you last used it. A
+  skill only named in a Skills section is found but has no years. Spellings
+  are merged ("ReactJS", "React.js" -> React), and the page shows which
+  skills are **on your list already**, in any spelling.
+- **A level for each skill**, in the Skills page's stars (1 Beginner ... 5
+  Expert), with the reason ("7.9 years across 2 jobs; still using it").
+  Parsing infers it (`skill_levels.py`): a level the resume gives the skill
+  itself wins ("Expert: Python", "familiar with Docker", "Go (advanced)");
+  otherwise years of use set it (under 1 year Familiar, 1-3 Proficient, 3-5
+  Advanced, 5+ Expert, which also needs the skill named 3+ times, in 2+ jobs,
+  or in a job title), counting the jobs that used something built on it
+  (React and TypeScript work is JavaScript work; PostgreSQL is SQL) and
+  years stated for it ("5+ years of Python"). A job title naming it means
+  at least Advanced; not used for 4+ years costs a star, unless the Skills
+  section still lists it; only listed is Familiar. The AI rates each skill
+  itself, weighing what the work shows ("led the migration" vs. "some
+  exposure to"), and the rules fill in any it doesn't rate.
+- **The jobs counted**, with their dates, so you can check the arithmetic.
+
+The AI only *reads*: it returns each job's title, company, dates, and skills,
+and the years are added up in code exactly like the parser's (models are
+unreliable at date arithmetic). Select skills on the page and **Add to your
+list** to add them to [your skills](#your-skills) as **core** skills at the
+stars the resume suggests. A skill already on your list stays core or other
+as you have it; when the resume suggests different stars, it can be ticked
+too, to take them ("Update ReactJS to 5 stars"). Nothing on your list
+changes unless you tick it. Saving re-scores your saved jobs, like the
+Skills page. Move any that aren't your main stack
+down to other skills on the Skills page: a Core match needs one core skill,
+so a core "Docker" lets a posting that's only about Docker and SQL match. The years of
+experience are shown, not used: the fit score still compares jobs with
+`YEARS_OF_EXPERIENCE` in `job_search.py`.
+
+Files: PDF (with real text; a scanned image has none), Word `.docx`, or
+plain text, up to 5 MB, or paste the text. Old `.doc` files and
+password-protected PDFs can't be read; the page says why. The text read from
+the file is shown under the results, to check it came through.
+
+**Setting up AI.** Add an API key for either provider to `backend/.env` and
+restart the API:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...     # Claude (default model claude-sonnet-4-5)
+OPENAI_API_KEY=sk-...            # or OpenAI (default model gpt-4.1-mini)
+RESUME_AI_PROVIDER=openai        # optional: which one, when both keys are set (Anthropic otherwise)
+RESUME_AI_MODEL=...              # optional: another model from that provider
+```
+
+Only the resume's text is sent, and only when you click **Read with AI**.
+
+The resume is kept in the database with its readings; uploading another
+replaces it, and **Remove** deletes it (your skill list stays as it is):
+
+```
+settings/resume
+    filename, file_type (pdf | docx | text), text, fingerprint, uploaded_at
+    analyses      {"parse": {...}, "ai": {...}}: years_experience, years_basis,
+                  stated_years, skills [{name, category, years, mentions, last_used,
+                  aliases, level, level_reason}], positions [{title, company, start,
+                  end, months, skills}],
+                  notes, analyzed_at, provider, model
+```
+
+From the command line:
+
+```bash
+pipenv run python resume.py ~/Documents/resume.pdf          # parse it and print what it found
+pipenv run python resume.py ~/Documents/resume.pdf --ai     # read it with AI instead
+pipenv run python resume.py ~/Documents/resume.pdf --save   # also save it for the Resume page
+```
+
 ## Fit score
 
 Every match gets a **fit score** from 0 to 100 (`job_fit.py`) that ranks how
@@ -475,6 +571,19 @@ curl -X PATCH http://127.0.0.1:8000/jobs/accenture-R00212345 \
      -H 'Content-Type: application/json' -d '{"status": "applied", "notes": "Applied via site"}'
 # With IG_API_TOKEN set, add: -H "Authorization: Bearer $IG_API_TOKEN"
 ```
+
+### Resume endpoints
+
+The dashboard's **Resume** page uploads and reads your resume through these
+(see [Your resume](#your-resume)). Resumes come back with timestamps as ISO
+strings.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /resume` | `{"resume": ... or null, "ai": {"configured", "provider", "model", "problem"}}` (never the key). |
+| `POST /resume` | `{"filename": "cv.pdf", "content_base64": "..."}` or `{"text": "..."}`: saves it (replacing the last one and its readings), parses it, and returns `{"resume": ...}`. `422` when it can't be read (not PDF/.docx/text, no text, over 5 MB). |
+| `POST /resume/analyze` | `{"method": "ai"}` (or `"parse"`, say after changing your skills): reads the saved resume again and keeps that reading next to the other. `404` without a resume, `503` for AI with no API key, `502` when the AI fails (its message is passed on), `504` when it's too slow, `409` if a new resume was uploaded meanwhile. |
+| `DELETE /resume` | Forgets it: `{"resume": null}`. |
 
 The full list, with every parameter, is at `/docs` while the API runs. The
 dashboard uses only `POST /jobs/reassess` (its **Refresh** button). It still
@@ -677,7 +786,12 @@ pipenv run pytest          # from backend/
 or `pytest` from the repository root to also run the archive-script tests.
 `tests/test_api.py` covers the HTTP API with FastAPI's test client, a fake
 search, and a temporary local store, so it needs neither network access nor a
-running server. `tests/test_job_queries.py` covers the filtering and sorting
+running server. The resume tests (`tests/test_resume*.py`) build their PDF and
+Word files by hand (`tests/resume_files.py`) and answer for the AI providers
+with a fake session, so they don't call any AI either.
+`tests/test_resume.py` also checks that `../frontend/src/test/fixtures/resume.json`
+(what the dashboard's tests read) is what this side writes; after changing the
+resume document, regenerate it with `UPDATE_RESUME_FIXTURE=1 pipenv run pytest tests/test_resume.py`. `tests/test_job_queries.py` covers the filtering and sorting
 behind `GET /jobs`.
 The suite includes a round-trip check that documents written by the dashboard
 (`../frontend`) read back correctly here.

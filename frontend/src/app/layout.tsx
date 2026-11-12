@@ -24,7 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link href="/" className="flex items-center gap-2 whitespace-nowrap">
                   <BriefcaseBusinessIcon className="size-5" />
                   {/* On phones the icon alone links home, so the nav still fits. */}
-                  <span className="text-lg font-semibold tracking-tight max-[459px]:sr-only">Job Finder</span>
+                  <span className="text-lg font-semibold tracking-tight max-[599px]:sr-only">Job Finder</span>
                 </Link>
                 <SiteNav />
               </div>

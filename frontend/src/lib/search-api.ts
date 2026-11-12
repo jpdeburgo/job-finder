@@ -1,8 +1,8 @@
 /**
  * Server-side access to the search API (backend/api.py, FastAPI).
  *
- * The browser never calls FastAPI directly: it calls this app's /api/runs
- * and /api/jobs/reassess routes, which forward here. That keeps the browser on one origin (no CORS)
+ * The browser never calls FastAPI directly: it calls this app's /api/runs,
+ * /api/jobs/reassess, and /api/resume routes, which forward here. That keeps the browser on one origin (no CORS)
  * and keeps `IG_API_TOKEN` on the server, like the Firebase credentials.
  *
  *   IG_API_URL    where the API listens (default http://127.0.0.1:8000)
@@ -25,6 +25,11 @@ export const API_TIMEOUT_MS = 10_000;
  * are saved, but the first time it loads each one from its job site.
  */
 export const REASSESS_TIMEOUT_MS = 5 * 60_000;
+/**
+ * Reading a resume with AI can take a minute or two (backend/resume_ai.py
+ * gives the model 120s); parsing is quick.
+ */
+export const RESUME_TIMEOUT_MS = 150_000;
 
 export const START_API_HINT = "Start it with `cd backend && pipenv run uvicorn api:app` (see backend/README.md).";
 

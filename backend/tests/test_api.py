@@ -621,3 +621,121 @@ def test_a_search_waits_for_a_reassessment(job_store):
     release.set()
     worker.join(5)
     assert client.post("/runs").status_code == 202
+
+
+# --- Resume ----------------------------------------------------------------------------
+
+import base64  # noqa: E402
+import re  # noqa: E402
+
+from resume_ai import AiReadError  # noqa: E402
+from resume_parser import parse_resume  # noqa: E402
+from tests.resume_files import SAMPLE_RESUME, make_pdf  # noqa: E402
+
+
+def _fake_ai(text, your_skills):
+    """Stands in for resume_ai.read_resume_with_ai: a parse, labelled as AI."""
+    parsed = parse_resume(text, your_skills)
+    return type(parsed)(**{**parsed.__dict__, "method": "ai", "provider": "anthropic", "model": "fake"})
+
+
+@pytest.fixture
+def resume_client(tmp_path):
+    store = FirestoreJobStore.local(tmp_path / "local_firestore.json", verbose=False)
+    app = api.create_app(api.RunManager(FakeSearch()), store_factory=lambda: store, ai_reader=_fake_ai)
+    return TestClient(app)
+
+
+def _upload(client, data, filename="jane.pdf"):
+    return client.post("/resume", json={"filename": filename, "content_base64": base64.b64encode(data).decode()})
+
+
+def test_no_resume_yet(resume_client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    body = resume_client.get("/resume").json()
+    assert body["resume"] is None
+    assert body["ai"]["configured"] is False and "ANTHROPIC_API_KEY" in body["ai"]["problem"]
+
+
+def test_upload_a_resume_file_then_read_it_with_ai(resume_client):
+    response = _upload(resume_client, make_pdf(SAMPLE_RESUME.splitlines()))
+
+    assert response.status_code == 200
+    saved = response.json()["resume"]
+    assert (saved["filename"], saved["file_type"]) == ("jane.pdf", "pdf")
+    assert isinstance(saved["uploaded_at"], str)  # JSON: timestamps as ISO strings
+    parsed = saved["analyses"]["parse"]
+    # "Present" is today, so the exact total moves with the clock.
+    assert parsed["years_basis"] == "positions" and parsed["years_experience"] >= 10
+    assert isinstance(parsed["analyzed_at"], str)
+    assert {"name", "years", "mentions", "category", "last_used", "aliases"} <= set(parsed["skills"][0])
+
+    analyzed = resume_client.post("/resume/analyze", json={"method": "ai"})
+    assert analyzed.status_code == 200
+    assert sorted(analyzed.json()["resume"]["analyses"]) == ["ai", "parse"]
+    assert sorted(resume_client.get("/resume").json()["resume"]["analyses"]) == ["ai", "parse"]
+
+
+def test_upload_pasted_text(resume_client):
+    saved = resume_client.post("/resume", json={"text": SAMPLE_RESUME}).json()["resume"]
+    assert (saved["filename"], saved["file_type"]) == ("Pasted text", "text")
+
+
+@pytest.mark.parametrize(
+    ("body", "status_code", "message"),
+    [
+        ({"filename": "cv.doc", "content_base64": base64.b64encode(b"\xd0\xcf\x11\xe0rest").decode()}, 422,
+         r"\.doc\) files can't be read"),
+        ({"content_base64": "not base64!"}, 422, "didn't arrive intact"),
+        ({"text": "   "}, 422, "Paste your resume's text first"),
+        ({"text": "a", "content_base64": "eA=="}, 422, "either content_base64 \\(a file\\) or text"),
+        ({}, 422, "either content_base64"),
+        ({"text": "a", "surprise": 1}, 422, "surprise"),
+    ],
+)
+def test_upload_problems(resume_client, body, status_code, message):
+    response = resume_client.post("/resume", json=body)
+    assert response.status_code == status_code
+    assert re.search(message, response.json()["error"])
+
+
+def test_analyze_problems(tmp_path, monkeypatch):
+    store = FirestoreJobStore.local(tmp_path / "local_firestore.json", verbose=False)
+
+    def failing_ai(text, skills):
+        raise AiReadError("Anthropic answered 401: invalid x-api-key")
+
+    def slow_ai(text, skills):
+        raise AiReadError("Anthropic didn't answer within 120s; try again.", timed_out=True)
+
+    def client_with(reader=None):
+        return TestClient(api.create_app(api.RunManager(FakeSearch()), store_factory=lambda: store, ai_reader=reader))
+
+    assert client_with().post("/resume/analyze", json={"method": "parse"}).status_code == 404
+    client_with().post("/resume", json={"text": SAMPLE_RESUME})
+
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "RESUME_AI_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+    not_configured = client_with().post("/resume/analyze", json={"method": "ai"})
+    assert not_configured.status_code == 503 and "AI isn't set up" in not_configured.json()["error"]
+
+    failed = client_with(failing_ai).post("/resume/analyze", json={"method": "ai"})
+    assert (failed.status_code, failed.json()) == (502, {"error": "Anthropic answered 401: invalid x-api-key"})
+    assert client_with(slow_ai).post("/resume/analyze", json={"method": "ai"}).status_code == 504
+    assert client_with().post("/resume/analyze", json={"method": "guess"}).status_code == 422
+
+    # The failures left the parsed reading alone.
+    assert list(store.load_resume()["analyses"]) == ["parse"]
+
+
+def test_delete_the_resume(resume_client):
+    resume_client.post("/resume", json={"text": SAMPLE_RESUME})
+    assert resume_client.delete("/resume").json() == {"resume": None}
+    assert resume_client.get("/resume").json()["resume"] is None
+
+
+@pytest.mark.parametrize(("method", "path"), [("get", "/resume"), ("post", "/resume"), ("post", "/resume/analyze"),
+                                              ("delete", "/resume")])
+def test_resume_needs_the_token_too(with_token, resume_client, method, path):
+    assert getattr(resume_client, method)(path).status_code == 401

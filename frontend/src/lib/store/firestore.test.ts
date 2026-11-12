@@ -190,6 +190,18 @@ describe("FirestoreJobStore", () => {
       expect(await store.getSearchSkills()).toBeNull();
     });
   });
+
+  describe("resume", () => {
+    it("reads settings/resume from the configured settings collection, or null", async () => {
+      const FirestoreJobStore = await load();
+      const db = seededDb();
+      const store = new FirestoreJobStore(db, config({ collections: { jobs: "jobs", runs: "runs", settings: "ig_settings" } }));
+      expect(await store.getResume()).toBeNull();
+      const resume = { filename: "cv.pdf", text: "Python", uploaded_at: FakeTimestamp.fromDate(new Date()) };
+      db.collections.ig_settings = { resume };
+      expect(await store.getResume()).toEqual(resume);
+    });
+  });
 });
 
 // --- connectFirestore: how the Admin app is initialised --------------------------

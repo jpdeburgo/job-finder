@@ -12,6 +12,7 @@ google-auth-oauthlib = "*"
 google-cloud-firestore = "*"
 fastapi = "*"
 uvicorn = "*"
+pypdf = "*"
 
 [dev-packages]
 pytest = "*"

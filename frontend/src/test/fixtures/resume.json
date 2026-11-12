@@ -1,0 +1,617 @@
+{
+  "analyses": {
+    "ai": {
+      "analyzed_at": "2026-11-11T09:30:00+00:00",
+      "method": "ai",
+      "model": "claude-test",
+      "notes": [
+        "The AI didn't name Full Stack, which is on your skill list; it was added because the resume mentions it."
+      ],
+      "positions": [
+        {
+          "company": "Acme Corp",
+          "end": null,
+          "months": 71,
+          "skills": [
+            "Python",
+            "Django",
+            "React",
+            "TypeScript",
+            "AWS",
+            "Kubernetes",
+            "Terraform"
+          ],
+          "start": "2021-01",
+          "title": "Senior Software Engineer"
+        },
+        {
+          "company": "Beta LLC",
+          "end": "2020-12",
+          "months": 34,
+          "skills": [
+            "Node.js",
+            "Express",
+            "AWS Lambda",
+            "PostgreSQL",
+            "Redis"
+          ],
+          "start": "2018-03",
+          "title": "Software Engineer"
+        }
+      ],
+      "provider": "anthropic",
+      "skills": [
+        {
+          "aliases": [
+            "Python3"
+          ],
+          "category": "Language",
+          "last_used": "present",
+          "level": 5,
+          "level_reason": "6 years; led the API work",
+          "mentions": 3,
+          "name": "Python",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "Amazon Web Services"
+          ],
+          "category": "Cloud",
+          "last_used": "present",
+          "level": 5,
+          "level_reason": "8.8 years across 2 jobs (through AWS Lambda); still using it",
+          "mentions": 3,
+          "name": "AWS",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "ReactJS",
+            "React.js"
+          ],
+          "category": "Frontend",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "Led the dashboard rewrite",
+          "mentions": 4,
+          "name": "React",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "Django REST Framework",
+            "DRF"
+          ],
+          "category": "Backend",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only 2 times; still using it",
+          "mentions": 2,
+          "name": "Django",
+          "years": 5.9
+        },
+        {
+          "aliases": [],
+          "category": "Language",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only 2 times; still using it",
+          "mentions": 2,
+          "name": "TypeScript",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "K8s",
+            "EKS",
+            "AKS",
+            "GKE"
+          ],
+          "category": "DevOps",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only 2 times; still using it",
+          "mentions": 2,
+          "name": "Kubernetes",
+          "years": 5.9
+        },
+        {
+          "aliases": [],
+          "category": "DevOps",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only 2 times; still using it",
+          "mentions": 2,
+          "name": "Terraform",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "NodeJS",
+            "Node JS",
+            "Node"
+          ],
+          "category": "Backend",
+          "last_used": "2020-12",
+          "level": 3,
+          "level_reason": "2.8 years across 1 job; last used 5 years ago, but still listed in your skills",
+          "mentions": 2,
+          "name": "Node.js",
+          "years": 2.8
+        },
+        {
+          "aliases": [
+            "Express.js",
+            "ExpressJS"
+          ],
+          "category": "Backend",
+          "last_used": "2020-12",
+          "level": 3,
+          "level_reason": "2.8 years across 1 job; last used 5 years ago, but still listed in your skills",
+          "mentions": 1,
+          "name": "Express",
+          "years": 2.8
+        },
+        {
+          "aliases": [
+            "Lambda functions",
+            "Lambda"
+          ],
+          "category": "Cloud",
+          "last_used": "2020-12",
+          "level": 2,
+          "level_reason": "2.8 years across 1 job; not used for 5 years",
+          "mentions": 1,
+          "name": "AWS Lambda",
+          "years": 2.8
+        },
+        {
+          "aliases": [
+            "Postgres",
+            "psql"
+          ],
+          "category": "Database",
+          "last_used": "2020-12",
+          "level": 2,
+          "level_reason": "2.8 years across 1 job; not used for 5 years",
+          "mentions": 1,
+          "name": "PostgreSQL",
+          "years": 2.8
+        },
+        {
+          "aliases": [],
+          "category": "Database",
+          "last_used": "2020-12",
+          "level": 2,
+          "level_reason": "2.8 years across 1 job; not used for 5 years",
+          "mentions": 1,
+          "name": "Redis",
+          "years": 2.8
+        },
+        {
+          "aliases": [
+            "Full-Stack",
+            "Fullstack"
+          ],
+          "category": "Practice",
+          "last_used": null,
+          "level": 2,
+          "level_reason": "Listed, but no job on the resume mentions using it",
+          "mentions": 1,
+          "name": "Full Stack",
+          "years": null
+        },
+        {
+          "aliases": [],
+          "category": "Practice",
+          "last_used": null,
+          "level": 2,
+          "level_reason": "Listed, but no job on the resume mentions using it",
+          "mentions": 0,
+          "name": "Code review",
+          "years": null
+        }
+      ],
+      "stated_years": 8,
+      "years_basis": "positions",
+      "years_experience": 8.8
+    },
+    "parse": {
+      "analyzed_at": "2026-11-11T09:30:00+00:00",
+      "method": "parse",
+      "model": null,
+      "notes": [
+        "The resume mentions 8 years of experience; the dates in its work history add up to 10.5."
+      ],
+      "positions": [
+        {
+          "company": "",
+          "end": null,
+          "months": 71,
+          "skills": [
+            "Python",
+            "TypeScript",
+            "React",
+            "Django",
+            "REST API",
+            "AWS",
+            "Kubernetes",
+            "Terraform"
+          ],
+          "start": "2021-01",
+          "title": "Senior Software Engineer · Acme Corp · Austin, TX"
+        },
+        {
+          "company": "",
+          "end": "2020-12",
+          "months": 24,
+          "skills": [
+            "React",
+            "WordPress"
+          ],
+          "start": "2019-01",
+          "title": "Freelance Web Developer"
+        },
+        {
+          "company": "",
+          "end": "2020-12",
+          "months": 34,
+          "skills": [
+            "Node.js",
+            "Microservices",
+            "PostgreSQL",
+            "Redis",
+            "AWS",
+            "AWS Lambda"
+          ],
+          "start": "2018-03",
+          "title": "Software Engineer · Beta LLC, Remote"
+        },
+        {
+          "company": "",
+          "end": "2018-02",
+          "months": 21,
+          "skills": [
+            "Java",
+            "jQuery",
+            "Spring Boot"
+          ],
+          "start": "2016-06",
+          "title": "Junior Developer, Gamma Inc."
+        }
+      ],
+      "provider": null,
+      "skills": [
+        {
+          "aliases": [
+            "Amazon Web Services"
+          ],
+          "category": "Cloud",
+          "last_used": "present",
+          "level": 5,
+          "level_reason": "8.8 years across 2 jobs; still using it",
+          "mentions": 3,
+          "name": "AWS",
+          "years": 8.8
+        },
+        {
+          "aliases": [
+            "ReactJS",
+            "React.js"
+          ],
+          "category": "Frontend",
+          "last_used": "present",
+          "level": 5,
+          "level_reason": "7.9 years across 2 jobs; still using it",
+          "mentions": 4,
+          "name": "React",
+          "years": 7.9
+        },
+        {
+          "aliases": [
+            "Python3"
+          ],
+          "category": "Language",
+          "last_used": "present",
+          "level": 5,
+          "level_reason": "5.9 years across 1 job; still using it",
+          "mentions": 3,
+          "name": "Python",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "ECMAScript",
+            "ES6",
+            "JS"
+          ],
+          "category": "Language",
+          "last_used": null,
+          "level": 5,
+          "level_reason": "10.5 years across 4 jobs (through TypeScript, React, Node.js, jQuery); still using it",
+          "mentions": 1,
+          "name": "JavaScript",
+          "years": null
+        },
+        {
+          "aliases": [],
+          "category": "Language",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only 2 times; still using it",
+          "mentions": 2,
+          "name": "TypeScript",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "Django REST Framework",
+            "DRF"
+          ],
+          "category": "Backend",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only 2 times; still using it",
+          "mentions": 2,
+          "name": "Django",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "K8s",
+            "EKS",
+            "AKS",
+            "GKE"
+          ],
+          "category": "DevOps",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only 2 times; still using it",
+          "mentions": 2,
+          "name": "Kubernetes",
+          "years": 5.9
+        },
+        {
+          "aliases": [],
+          "category": "DevOps",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only 2 times; still using it",
+          "mentions": 2,
+          "name": "Terraform",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "RESTful",
+            "RESTful API",
+            "RESTful APIs",
+            "REST APIs",
+            "RESTful services",
+            "REST"
+          ],
+          "category": "Backend",
+          "last_used": "present",
+          "level": 4,
+          "level_reason": "5.9 years across 1 job; named only once; still using it",
+          "mentions": 1,
+          "name": "REST API",
+          "years": 5.9
+        },
+        {
+          "aliases": [
+            "Docker Compose"
+          ],
+          "category": "DevOps",
+          "last_used": null,
+          "level": 4,
+          "level_reason": "5.9 years across 1 job (through Kubernetes); named only once; still using it",
+          "mentions": 1,
+          "name": "Docker",
+          "years": null
+        },
+        {
+          "aliases": [
+            "NodeJS",
+            "Node JS",
+            "Node"
+          ],
+          "category": "Backend",
+          "last_used": "2020-12",
+          "level": 3,
+          "level_reason": "2.8 years across 1 job; last used 5 years ago, but still listed in your skills",
+          "mentions": 2,
+          "name": "Node.js",
+          "years": 2.8
+        },
+        {
+          "aliases": [
+            "T-SQL",
+            "PL/SQL"
+          ],
+          "category": "Language",
+          "last_used": null,
+          "level": 3,
+          "level_reason": "2.8 years across 1 job (through PostgreSQL); last used 5 years ago, but still listed in your skills",
+          "mentions": 1,
+          "name": "SQL",
+          "years": null
+        },
+        {
+          "aliases": [
+            "Microservice",
+            "micro-services"
+          ],
+          "category": "Backend",
+          "last_used": "2020-12",
+          "level": 2,
+          "level_reason": "2.8 years across 1 job; not used for 5 years",
+          "mentions": 1,
+          "name": "Microservices",
+          "years": 2.8
+        },
+        {
+          "aliases": [
+            "Postgres",
+            "psql"
+          ],
+          "category": "Database",
+          "last_used": "2020-12",
+          "level": 2,
+          "level_reason": "2.8 years across 1 job; not used for 5 years",
+          "mentions": 1,
+          "name": "PostgreSQL",
+          "years": 2.8
+        },
+        {
+          "aliases": [],
+          "category": "Database",
+          "last_used": "2020-12",
+          "level": 2,
+          "level_reason": "2.8 years across 1 job; not used for 5 years",
+          "mentions": 1,
+          "name": "Redis",
+          "years": 2.8
+        },
+        {
+          "aliases": [
+            "Lambda functions",
+            "Lambda"
+          ],
+          "category": "Cloud",
+          "last_used": "2020-12",
+          "level": 2,
+          "level_reason": "2.8 years across 1 job; not used for 5 years",
+          "mentions": 1,
+          "name": "AWS Lambda",
+          "years": 2.8
+        },
+        {
+          "aliases": [],
+          "category": "Platform",
+          "last_used": "2020-12",
+          "level": 2,
+          "level_reason": "2 years across 1 job; not used for 5 years",
+          "mentions": 1,
+          "name": "WordPress",
+          "years": 2.0
+        },
+        {
+          "aliases": [
+            "J2EE",
+            "Java EE"
+          ],
+          "category": "Language",
+          "last_used": "2018-02",
+          "level": 2,
+          "level_reason": "1.8 years across 1 job; not used for 8 years",
+          "mentions": 1,
+          "name": "Java",
+          "years": 1.8
+        },
+        {
+          "aliases": [],
+          "category": "Frontend",
+          "last_used": "2018-02",
+          "level": 2,
+          "level_reason": "1.8 years across 1 job; not used for 8 years",
+          "mentions": 1,
+          "name": "jQuery",
+          "years": 1.8
+        },
+        {
+          "aliases": [
+            "Spring Framework",
+            "Spring MVC",
+            "SpringBoot",
+            "Spring"
+          ],
+          "category": "Backend",
+          "last_used": "2018-02",
+          "level": 2,
+          "level_reason": "1.8 years across 1 job; not used for 8 years",
+          "mentions": 1,
+          "name": "Spring Boot",
+          "years": 1.8
+        },
+        {
+          "aliases": [
+            "Golang"
+          ],
+          "category": "Language",
+          "last_used": null,
+          "level": 2,
+          "level_reason": "Listed, but no job on the resume mentions using it",
+          "mentions": 1,
+          "name": "Go",
+          "years": null
+        },
+        {
+          "aliases": [],
+          "category": "Language",
+          "last_used": null,
+          "level": 2,
+          "level_reason": "Listed, but no job on the resume mentions using it",
+          "mentions": 1,
+          "name": "Rust",
+          "years": null
+        },
+        {
+          "aliases": [
+            "Express.js",
+            "ExpressJS"
+          ],
+          "category": "Backend",
+          "last_used": null,
+          "level": 2,
+          "level_reason": "Listed, but no job on the resume mentions using it",
+          "mentions": 1,
+          "name": "Express",
+          "years": null
+        },
+        {
+          "aliases": [],
+          "category": "DevOps",
+          "last_used": null,
+          "level": 2,
+          "level_reason": "Listed, but no job on the resume mentions using it",
+          "mentions": 1,
+          "name": "GitHub Actions",
+          "years": null
+        },
+        {
+          "aliases": [],
+          "category": "Tools",
+          "last_used": null,
+          "level": 2,
+          "level_reason": "Listed, but no job on the resume mentions using it",
+          "mentions": 1,
+          "name": "GitHub",
+          "years": null
+        },
+        {
+          "aliases": [
+            "Full-Stack",
+            "Fullstack"
+          ],
+          "category": "Practice",
+          "last_used": null,
+          "level": 2,
+          "level_reason": "Listed, but no job on the resume mentions using it",
+          "mentions": 1,
+          "name": "Full Stack",
+          "years": null
+        }
+      ],
+      "stated_years": 8,
+      "years_basis": "positions",
+      "years_experience": 10.5
+    }
+  },
+  "file_type": "pdf",
+  "filename": "jane-doe.pdf",
+  "fingerprint": "800ed344de2479a6",
+  "text": "Jane Doe\nCypress, TX | jane@example.com | (555) 201-9988\n\nSUMMARY\nFull stack engineer with 8+ years of experience building web apps in Python and React.\n\nTECHNICAL SKILLS\nLanguages: Python, TypeScript, JavaScript, Go, SQL\nFrameworks: React, Django, Node.js, Express\nCloud & DevOps: AWS, Docker, Kubernetes, Terraform, GitHub Actions\n\nPROFESSIONAL EXPERIENCE\nSenior Software Engineer | Acme Corp | Austin, TX\nJan 2021 – Present\n- Built REST APIs in Python/Django serving 2M users; migrated services 2019–2020 to AWS\n- Led the React + TypeScript rewrite of the customer dashboard\n- Ran services on Kubernetes with Terraform-managed infrastructure\n\nSoftware Engineer\nBeta LLC, Remote\n03/2018 - 12/2020\n- Node.js and Express microservices on AWS Lambda\n- PostgreSQL schema design, Redis caching\n\nFreelance Web Developer          2019 - 2020\n- WordPress and React sites for local businesses\n\nJunior Developer, Gamma Inc.     June 2016 – February 2018\n- Java and Spring Boot; jQuery front end\n\nEDUCATION\nB.S. Computer Science, State University     2012 – 2016\n\nPROJECTS\nSide project in Rust    2022 - 2023",
+  "uploaded_at": "2026-11-11T09:30:00+00:00"
+}

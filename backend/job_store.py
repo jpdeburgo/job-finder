@@ -22,7 +22,8 @@ Layout of the ``jobs`` collection (one document per job ID:
 
 The ``runs`` collection gets one auto-ID document per script run, and the
 ``settings`` collection holds your own skill list from the dashboard
-(``settings/search_skills``; see search_skills.py).
+(``settings/search_skills``; see search_skills.py) and your resume with what
+was read from it (``settings/resume``; see resume.py).
 
 Each job's description is kept apart from it, in ``job_descriptions`` (same
 document ID: ``{"text": ..., "saved_at": ...}``), so saved jobs can be
@@ -43,6 +44,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 from search_skills import SEARCH_SKILLS_DOCUMENT, SearchSkills
+
+# Where your resume is kept (resume.RESUME_DOCUMENT; not imported, so the
+# store doesn't load the resume readers).
+RESUME_DOCUMENT = "resume"
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from job_search import JobMatch
@@ -252,6 +257,11 @@ class FirestoreJobStore:
         snapshot = self._settings.document(SEARCH_SKILLS_DOCUMENT).get()
         return snapshot.to_dict() if snapshot.exists else None
 
+    def load_resume(self) -> dict[str, Any] | None:
+        """Your saved resume (``settings/resume``, see resume.py), or None."""
+        snapshot = self._settings.document(RESUME_DOCUMENT).get()
+        return snapshot.to_dict() if snapshot.exists else None
+
     def load_descriptions(self) -> dict[str, str]:
         """Every saved job description, by job ID."""
         return {
@@ -374,6 +384,29 @@ class FirestoreJobStore:
         self._settings.document(SEARCH_SKILLS_DOCUMENT).set(
             {**skills.as_document(), "updated_at": utcnow()}
         )
+
+    def save_resume(self, document: dict[str, Any]) -> None:
+        """Save your resume, replacing the one before and its readings."""
+        self._settings.document(RESUME_DOCUMENT).set(document)
+
+    def save_resume_analysis(
+        self, method: str, analysis: dict[str, Any], fingerprint: str
+    ) -> dict[str, Any] | None:
+        """Keep a reading of the resume next to the others and return the
+        updated document; None (nothing saved) when the saved resume isn't
+        the one that was read, because a new one was uploaded meanwhile."""
+        reference = self._settings.document(RESUME_DOCUMENT)
+        saved = reference.get().to_dict()
+        if not saved or saved.get("fingerprint") != fingerprint:
+            return None
+        analyses = dict(saved.get("analyses") or {})
+        analyses[method] = analysis
+        reference.update({"analyses": analyses})
+        return {**saved, "analyses": analyses}
+
+    def delete_resume(self) -> None:
+        """Forget your resume and its readings (nothing else changes)."""
+        self._settings.document(RESUME_DOCUMENT).delete()
 
     def log_run(
         self,
@@ -511,6 +544,9 @@ class LocalDocumentReference:
     def update(self, field_updates: dict[str, Any]) -> None:
         self._collection._client._apply([("update", self, field_updates, False)])
 
+    def delete(self) -> None:
+        self._collection._client._apply([("delete", self, {}, False)])
+
 
 class LocalQuery:
     def __init__(self, collection: "LocalCollectionReference", filters: list[LocalFieldFilter]):
@@ -641,7 +677,13 @@ class LocalFirestoreClient:
         for kind, reference, fields, merge in ops:
             docs = data.setdefault(reference._collection.id, {})
             existing = docs.get(reference.id)
-            if kind == "update":
+            if kind == "delete":
+                # Like Firestore: deleting a missing document is fine, and a
+                # collection with no documents left doesn't exist.
+                docs.pop(reference.id, None)
+                if not docs:
+                    data.pop(reference._collection.id, None)
+            elif kind == "update":
                 if existing is None:
                     raise KeyError(f"No document to update: {reference.path}")
                 existing.update(fields)

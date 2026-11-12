@@ -5,7 +5,7 @@ finds and records. It reads the same Firestore database (or the same
 `local_firestore.json` stand-in) the script writes, so there is nothing to
 sync: run the script, refresh the page.
 
-It has three pages, linked from the header:
+It has four pages, linked from the header:
 
 - **Home (`/`)** shows where your search stands. At the top are the **Run
   search** button and the result of the last run. Below that are totals for
@@ -32,6 +32,16 @@ It has three pages, linked from the header:
   **Reset to defaults** goes back to them. See
   [Your skills](../backend/README.md#your-skills) for what the list and the
   stars change.
+- **Resume (`/resume`)** works out the skills and years of experience your
+  resume shows. Upload it (PDF, Word `.docx`, or text, or paste it) and it's
+  parsed at once; **Read with AI** reads it with Claude or OpenAI too, when
+  an API key is set up, and the **Parsed / AI** switch compares the two.
+  You see your total years (the dates of your jobs added up, overlaps
+  counted once), each skill with its level in stars (and why), its years,
+  and when you last used it, and the jobs that were counted. Tick the skills
+  that aren't on your list yet to add them as core skills at those stars,
+  or ones that are, to take the resume's stars instead of yours. Uploading and reading need the search API
+  running. See [Your resume](../backend/README.md#your-resume).
 
 In the tracker you can:
 
@@ -199,15 +209,20 @@ src/
 │   ├── skills/page.tsx          the Skills page (/skills): reads your skill list, renders SkillsEditor
 │   ├── api/skills/route.ts      GET /api/skills, PUT { skills, core_skills }, DELETE (back to the defaults)
 │   │                            → { skills, core_skills, source, updated_at, defaults }
+│   ├── resume/page.tsx          the Resume page (/resume): reads your resume and skill list, renders ResumePanel
+│   ├── api/resume/route.ts      POST (a file as multipart, or JSON { text }), DELETE
+│   │                            → forwarded to backend/api.py (the file as base64) → { resume }
+│   ├── api/resume/analyze/…     POST { method: "ai" | "parse" } → forwarded to backend/api.py → { resume }
 │   └── api/runs/…               POST /api/runs, GET /api/runs/latest, GET /api/runs/:id
 │                                → forwarded to backend/api.py (FastAPI) → { run }
-├── components/                  client UI (HomeOverview, JobsDashboard, RunSearchPanel, SkillsEditor (with its star rating), SiteNav, JobRow, JobDetails drawer, ...)
+├── components/                  client UI (HomeOverview, JobsDashboard, RunSearchPanel, SkillsEditor (with its star rating), ResumePanel, SiteNav, JobRow, JobDetails drawer, ...)
 │   └── ui/                      shadcn/ui primitives (button, select, sheet, table, ...)
 └── lib/
     ├── config.ts                IG_STATE_BACKEND / Firebase env resolution (port of job_store.py)
     ├── store/                   JobStore interface + Firestore (firebase-admin) and JSON-file implementations
     ├── status-update.ts         validates PATCH bodies; builds the same fields jobs_cli.py writes
     ├── skills.ts                the default skills, validating a list (port of search_skills.py), editing helpers
+    ├── resume.ts                reading the stored resume (backend/resume.py writes it), formatting, adding its skills to your list
     ├── search-api.ts            server-side forwarding to the search API (IG_API_URL / IG_API_TOKEN)
     ├── runs.ts                  describing search runs (pure functions)
     ├── reassess.ts              describing a reassessment for the Refresh notice (pure functions)
@@ -221,7 +236,7 @@ src/
   primitives, styled with Tailwind v4 — see [Component library](#component-library).
 - All database access happens **on the server** (route handlers and the
   server component) through the Firebase **Admin SDK** with the script's
-  service account. The browser only talks to `/api/jobs`, `/api/skills`, and `/api/runs`; no Firebase
+  service account. The browser only talks to `/api/jobs`, `/api/skills`, `/api/resume`, and `/api/runs`; no Firebase
   credentials or config are shipped to the client.
 - The page is rendered at request time (`connection()` + `<Suspense>`), so
   it's never frozen into a static build.

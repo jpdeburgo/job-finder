@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadJobs } from "./load-jobs";
+import { loadJobs, loadResumePage } from "./load-jobs";
 import { resetJobStore } from "./store";
 
 const FIXTURE = path.join(__dirname, "..", "test", "fixtures", "local_firestore.json");
@@ -52,5 +52,34 @@ describe("loadJobs", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.message).toMatch(/No Firebase credentials found/);
+  });
+});
+
+describe("loadResumePage", () => {
+  it("reads your resume and skill list from the store", async () => {
+    const db = path.join(dir, "local_firestore.json");
+    const resume = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "test", "fixtures", "resume.json"), "utf-8"));
+    fs.writeFileSync(db, JSON.stringify({ settings: { resume } }));
+    process.env.IG_STATE_BACKEND = "local";
+    process.env.IG_LOCAL_DB_PATH = db;
+
+    const result = await loadResumePage();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.resume?.filename).toBe("jane-doe.pdf");
+    expect(Object.keys(result.resume?.analyses ?? {})).toEqual(["parse", "ai"]);
+    expect(result.skills.source).toBe("default");
+    expect(result.store.backend).toBe("local");
+  });
+
+  it("is a null resume before one is uploaded, and a message when the store can't open", async () => {
+    process.env.IG_STATE_BACKEND = "local";
+    process.env.IG_LOCAL_DB_PATH = path.join(dir, "missing.json");
+    expect(await loadResumePage()).toMatchObject({ ok: true, resume: null });
+
+    resetJobStore();
+    process.env.IG_STATE_BACKEND = "firestore";
+    expect(await loadResumePage()).toMatchObject({ ok: false, message: expect.stringMatching(/No Firebase credentials/) });
   });
 });

@@ -6,6 +6,7 @@
  * /api/runs, which forwards to the FastAPI service in backend/api.py.
  */
 
+import { resumeFromDocument, type Resume, type ResumeMethod } from "./resume";
 import type { SearchSkills, SkillSettings } from "./skills";
 import type { Job, JobPatch, ReassessSummary, RunRequest, SearchRun, StoreInfo } from "./types";
 
@@ -73,6 +74,48 @@ export async function saveSkills(skills: SearchSkills): Promise<SkillSettings> {
 /** Go back to the default skills in backend/job_search.py. */
 export async function resetSkills(): Promise<SkillSettings> {
   return handle<SkillSettings>(await fetch("/api/skills", { method: "DELETE" }));
+}
+
+async function resumeFrom(response: Response): Promise<Resume> {
+  const resume = resumeFromDocument((await handle<{ resume: unknown }>(response)).resume);
+  if (!resume) throw new ApiError("The search API didn't send the resume back.", 502);
+  return resume;
+}
+
+/**
+ * Upload your resume (a file, or its text pasted), replacing the last one,
+ * and get back what parsing it found. Rejects with a 422 `ApiError` for a
+ * file that can't be read, and a 503 if the search API isn't running.
+ */
+export async function uploadResume(source: File | string): Promise<Resume> {
+  if (typeof source === "string") {
+    return resumeFrom(
+      await fetch("/api/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: source }),
+      }),
+    );
+  }
+  const form = new FormData();
+  form.append("file", source);
+  return resumeFrom(await fetch("/api/resume", { method: "POST", body: form }));
+}
+
+/** Read the saved resume again: with AI, or by parsing. Rejects with a 503 `ApiError` when AI isn't set up. */
+export async function analyzeResume(method: ResumeMethod): Promise<Resume> {
+  return resumeFrom(
+    await fetch("/api/resume/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method }),
+    }),
+  );
+}
+
+/** Forget your resume and what was read from it (your skill list stays as it is). */
+export async function deleteResume(): Promise<void> {
+  await handle<{ resume: null }>(await fetch("/api/resume", { method: "DELETE" }));
 }
 
 /** Start a search. Rejects with a 409 `ApiError` (whose body has the current `run`) if one is already going. */

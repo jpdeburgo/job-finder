@@ -29,6 +29,12 @@ export interface JobStore {
   saveSearchSkills(skills: SearchSkills, now?: Date): Promise<void>;
   /** Delete the saved list, so the search goes back to its defaults. */
   resetSearchSkills(): Promise<void>;
+  /**
+   * Your saved resume (`settings/resume`) as stored, or null without one.
+   * Only backend/resume.py writes it (uploads go through the search API);
+   * `resumeFromDocument` reads it.
+   */
+  getResume(): Promise<Record<string, unknown> | null>;
 }
 
 export class JobNotFoundError extends Error {
