@@ -9,7 +9,9 @@
  * search uses the defaults in backend/job_search.py.
  */
 
-import { toIsoString } from "./jobs";
+import { compareSkillNames, toIsoString } from "./jobs";
+
+export { compareSkillNames };
 
 export const SEARCH_SKILLS_DOCUMENT = "search_skills";
 export const MAX_SKILLS = 100;
@@ -301,6 +303,26 @@ export function setCore(list: SearchSkills, name: string, core: boolean): Search
 export function setProficiency(list: SearchSkills, name: string, stars: number): SearchSkills {
   const level = Math.min(MAX_PROFICIENCY, Math.max(MIN_PROFICIENCY, Math.round(stars)));
   return withCore(list.skills, list.core_skills, { ...list.proficiency, [name]: level });
+}
+
+// --- Showing a list in another order (a view: the saved order doesn't change) ---------
+
+export const SKILL_SORTS = ["list", "name", "proficiency"] as const;
+export type SkillSort = (typeof SKILL_SORTS)[number];
+export const SKILL_SORT_LABELS: Record<SkillSort, string> = { list: "List order", name: "A–Z", proficiency: "Proficiency" };
+
+/**
+ * `names` in the chosen order: as listed, A–Z, or most stars first (A–Z
+ * among equal stars). Skills without stars count as DEFAULT_PROFICIENCY.
+ */
+export function sortSkillNames(names: readonly string[], sort: SkillSort, proficiency: Record<string, number>): string[] {
+  if (sort === "list") return [...names];
+  const sorted = [...names].sort(compareSkillNames);
+  if (sort === "proficiency") {
+    const stars = (name: string) => proficiency[name] ?? DEFAULT_PROFICIENCY;
+    sorted.sort((a, b) => stars(b) - stars(a)); // stable: A–Z within each number of stars
+  }
+  return sorted;
 }
 
 /** Why a list can't be saved yet, or null if it can. */

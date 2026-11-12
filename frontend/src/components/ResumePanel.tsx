@@ -16,6 +16,8 @@ import { describeReassess, reassessProblem, type ReassessNotice } from "@/lib/re
 import {
   MAX_RESUME_BYTES,
   METHOD_LABELS,
+  DETECTED_SKILL_SORTS,
+  DETECTED_SKILL_SORT_LABELS,
   RESUME_FILE_TYPES,
   RESUME_METHODS,
   canApply,
@@ -25,8 +27,10 @@ import {
   formatYears,
   listedAs,
   ratingChange,
+  sortDetectedSkills,
   withDetectedSkills,
   type DetectedSkill,
+  type DetectedSkillSort,
   type RatingChange,
   type Resume,
   type ResumeAnalysis,
@@ -34,6 +38,7 @@ import {
 } from "@/lib/resume";
 import { MAX_PROFICIENCY, MIN_PROFICIENCY, PROFICIENCY_LABELS, type SearchSkills, type SkillSettings } from "@/lib/skills";
 import type { StoreInfo } from "@/lib/types";
+import { useStoredChoice } from "@/lib/use-stored-choice";
 import { cn } from "@/lib/utils";
 import { ReassessNoticeAlert } from "./ReassessNoticeAlert";
 
@@ -382,6 +387,7 @@ function AnalysisView({ analysis, list, selected, busy, onSelect, onAdd }: Analy
   const fresh = analysis.skills.filter((skill) => !listedAs(skill, list));
   const actionable = analysis.skills.filter((skill) => canApply(skill, list));
   const picked = analysis.skills.filter((skill) => selected.has(skill.name));
+  const [sort, setSort] = useStoredChoice<DetectedSkillSort>("job-finder:resume-skills-sort", DETECTED_SKILL_SORTS, "level");
   const toggle = (name: string, on: boolean) => {
     const next = new Set(selected);
     if (on) next.add(name);
@@ -423,6 +429,20 @@ function AnalysisView({ analysis, list, selected, busy, onSelect, onAdd }: Analy
             jobs that mention a skill; a skill only listed (in a Skills section, say) has none.
           </span>
           <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              aria-label="Sort skills"
+              value={sort}
+              onValueChange={(value) => value && setSort(value as DetectedSkillSort)}
+            >
+              {DETECTED_SKILL_SORTS.map((option) => (
+                <ToggleGroupItem key={option} value={option} className="px-3">
+                  {DETECTED_SKILL_SORT_LABELS[option]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
             {actionable.length > 0 && (
               <Button
                 variant="ghost"
@@ -444,7 +464,7 @@ function AnalysisView({ analysis, list, selected, busy, onSelect, onAdd }: Analy
         {analysis.skills.length === 0 ? (
           <p className="text-muted-foreground text-sm italic">No skills found.</p>
         ) : (
-          <SkillsTable skills={analysis.skills} list={list} selected={selected} disabled={busy !== null} onToggle={toggle} />
+          <SkillsTable skills={sortDetectedSkills(analysis.skills, sort)} list={list} selected={selected} disabled={busy !== null} onToggle={toggle} />
         )}
       </section>
 

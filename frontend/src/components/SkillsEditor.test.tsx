@@ -87,6 +87,76 @@ describe("showing the list", () => {
   });
 });
 
+describe("sorting", () => {
+  // Not in A–Z or star order as listed.
+  const unsorted = () =>
+    settings({
+      skills: ["TypeScript", "Python", "React", "SQL", "AWS", "Docker"],
+      core_skills: ["TypeScript", "Python", "React"],
+      proficiency: { TypeScript: 4, Python: 5, React: 2, SQL: 2, AWS: 3, Docker: 5 },
+    });
+  const sortBy = (name: string) => screen.getByRole("radio", { name });
+
+  it("shows your list in its own order until you choose another", () => {
+    render(<SkillsEditor initialSettings={unsorted()} store={store} />);
+    expect(sortBy("List order")).toHaveAttribute("aria-checked", "true");
+    expect(chips("Core skills")).toEqual(["TypeScript", "Python", "React"]);
+    expect(chips("Other skills")).toEqual(["SQL", "AWS", "Docker"]);
+  });
+
+  it("sorts both groups A–Z or by stars, without changing the list", async () => {
+    const user = setupUser();
+    render(<SkillsEditor initialSettings={unsorted()} store={store} />);
+
+    await user.click(sortBy("A–Z"));
+    expect(chips("Core skills")).toEqual(["Python", "React", "TypeScript"]);
+    expect(chips("Other skills")).toEqual(["AWS", "Docker", "SQL"]);
+
+    await user.click(sortBy("Proficiency"));
+    expect(chips("Core skills")).toEqual(["Python", "TypeScript", "React"]);
+    expect(chips("Other skills")).toEqual(["Docker", "AWS", "SQL"]);
+
+    // Only the view changed: nothing to save.
+    expect(saveButton()).toBeDisabled();
+    expect(status()).toBeEmptyDOMElement();
+  });
+
+  it("keeps a skill in place while you rate it, and re-sorts when you save", async () => {
+    const user = setupUser();
+    render(<SkillsEditor initialSettings={unsorted()} store={store} />);
+    await user.click(sortBy("Proficiency"));
+
+    await user.click(stars("React").getByRole("radio", { name: /^5 stars/ }));
+
+    expect(rating("React")).toBe(5);
+    expect(chips("Core skills")).toEqual(["Python", "TypeScript", "React"]); // not moved yet
+    expect(screen.getByText("Sorted by your saved stars; saving re-sorts.")).toBeInTheDocument();
+
+    await user.click(saveButton());
+    await waitFor(() => expect(chips("Core skills")).toEqual(["Python", "React", "TypeScript"])); // 5, 5 (A–Z), 4
+    expect(screen.queryByText("Sorted by your saved stars; saving re-sorts.")).not.toBeInTheDocument();
+  });
+
+  it("puts a new skill in its sorted place", async () => {
+    const user = setupUser();
+    render(<SkillsEditor initialSettings={unsorted()} store={store} />);
+    await user.click(sortBy("A–Z"));
+    await user.type(screen.getByRole("textbox", { name: "Add another skill" }), "Bash{Enter}");
+    expect(chips("Other skills")).toEqual(["AWS", "Bash", "Docker", "SQL"]);
+  });
+
+  it("remembers your choice next time", async () => {
+    const user = setupUser();
+    const { unmount } = render(<SkillsEditor initialSettings={unsorted()} store={store} />);
+    await user.click(sortBy("A–Z"));
+    unmount();
+
+    render(<SkillsEditor initialSettings={unsorted()} store={store} />);
+    expect(sortBy("A–Z")).toHaveAttribute("aria-checked", "true");
+    expect(chips("Core skills")).toEqual(["Python", "React", "TypeScript"]);
+  });
+});
+
 describe("editing", () => {
   it("adds several skills at once, as core or other", async () => {
     const user = setupUser();

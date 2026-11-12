@@ -1,8 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
+import { resetStoredChoices } from "@/lib/use-stored-choice";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  // Remembered choices (src/lib/use-stored-choice.ts) mustn't leak between tests.
+  if (typeof window !== "undefined") window.localStorage?.clear();
+  resetStoredChoices();
+});
 
 // jsdom lacks a few DOM APIs that Radix primitives (Select, Dialog) call.
 if (!Element.prototype.hasPointerCapture) {

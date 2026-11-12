@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { reassessJobs, resetSkills, saveSkills } from "@/lib/client";
 import { formatDate } from "@/lib/jobs";
 import { describeReassess, reassessProblem, type ReassessNotice } from "@/lib/reassess";
@@ -17,16 +18,21 @@ import {
   MIN_PROFICIENCY,
   MIN_SKILL_MATCHES,
   PROFICIENCY_LABELS,
+  SKILL_SORTS,
+  SKILL_SORT_LABELS,
   addSkills,
   removeSkill,
   sameSkills,
   setCore,
   setProficiency,
   skillsProblem,
+  sortSkillNames,
   type SearchSkills,
   type SkillSettings,
+  type SkillSort,
 } from "@/lib/skills";
 import type { StoreInfo } from "@/lib/types";
+import { useStoredChoice } from "@/lib/use-stored-choice";
 import { cn } from "@/lib/utils";
 import { ReassessNoticeAlert } from "./ReassessNoticeAlert";
 
@@ -59,13 +65,18 @@ export function SkillsEditor({ initialSettings, store }: Props) {
   const [rescore, setRescore] = useState<Rescore>(null);
   // Bumped on save, reset, and discard so the Add boxes start over (no stale "already listed").
   const [version, setVersion] = useState(0);
+  // Only how the chips are shown; the list's own order (what's saved) doesn't change.
+  const [sort, setSort] = useStoredChoice<SkillSort>("job-finder:skills-sort", SKILL_SORTS, "list");
 
   const rescoring = rescore === "running";
   const dirty = !sameSkills(draft, saved);
   const problem = skillsProblem(draft);
   const core = new Set(draft.core_skills);
-  const coreSkills = draft.skills.filter((name) => core.has(name));
-  const otherSkills = draft.skills.filter((name) => !core.has(name));
+  // By the stars as saved, so a chip doesn't jump away while you rate it; saving re-sorts.
+  const sortStars = { ...draft.proficiency, ...saved.proficiency };
+  const coreSkills = sortSkillNames(draft.skills.filter((name) => core.has(name)), sort, sortStars);
+  const otherSkills = sortSkillNames(draft.skills.filter((name) => !core.has(name)), sort, sortStars);
+  const starsPending = sort === "proficiency" && draft.skills.some((name) => sortStars[name] !== draft.proficiency[name]);
   const where = store.emulator ? "the Firestore emulator" : STORE_LABEL[store.backend];
 
   const edit = (next: SearchSkills) => {
@@ -152,6 +163,28 @@ export function SkillsEditor({ initialSettings, store }: Props) {
         </CardHeader>
 
         <CardContent className="space-y-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-muted-foreground text-xs" aria-hidden>
+              Sort
+            </span>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              aria-label="Sort skills"
+              value={sort}
+              onValueChange={(value) => value && setSort(value as SkillSort)}
+            >
+              {SKILL_SORTS.map((option) => (
+                <ToggleGroupItem key={option} value={option} className="px-3">
+                  {SKILL_SORT_LABELS[option]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            {starsPending && (
+              <span className="text-muted-foreground text-xs">Sorted by your saved stars; saving re-sorts.</span>
+            )}
+          </div>
           <SkillGroup
             key={`core-${version}`}
             title="Core skills"

@@ -13,6 +13,7 @@ import {
   setProficiency,
   skillSettingsFromDocument,
   skillsProblem,
+  sortSkillNames,
   splitSkillInput,
 } from "./skills";
 
@@ -217,3 +218,27 @@ describe("editing a list", () => {
     expect(sameSkills(start, list(["Python", "SQL", "AWS"], ["Python", "SQL"]))).toBe(false);
   });
 });
+
+describe("sortSkillNames", () => {
+  const names = ["react", "AWS", "Java 11", ".NET", "Java 8", "Go"];
+  const stars = { react: 5, AWS: 2, "Java 11": 5, ".NET": 2, "Java 8": 4 }; // Go: unrated (3)
+
+  it("keeps the list's order", () => {
+    expect(sortSkillNames(names, "list", stars)).toEqual(names);
+  });
+
+  it("sorts A–Z in any case, numbers in order", () => {
+    expect(sortSkillNames(names, "name", stars)).toEqual([".NET", "AWS", "Go", "Java 8", "Java 11", "react"]);
+  });
+
+  it("sorts by stars, A–Z among equals, unrated counting as the default", () => {
+    expect(sortSkillNames(names, "proficiency", stars)).toEqual(["Java 11", "react", "Java 8", "Go", ".NET", "AWS"]);
+  });
+
+  it("doesn't change the list it's given", () => {
+    const copy = [...names];
+    sortSkillNames(copy, "name", stars);
+    expect(copy).toEqual(names);
+  });
+});
+

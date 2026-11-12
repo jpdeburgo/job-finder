@@ -31,7 +31,10 @@ It has four pages, linked from the header:
   save, the page shows the defaults from `backend/job_search.py`, and
   **Reset to defaults** goes back to them. See
   [Your skills](../backend/README.md#your-skills) for what the list and the
-  stars change.
+  stars change. **Sort** shows both groups in your list's order, A–Z, or by
+  proficiency (most stars first, by the stars as saved, so a skill doesn't
+  jump away while you rate it); it only changes the view, and this browser
+  remembers it.
 - **Resume (`/resume`)** works out the skills and years of experience your
   resume shows. Upload it (PDF, Word `.docx`, or text, or paste it) and it's
   parsed at once; **Read with AI** reads it with Claude or OpenAI too, when
@@ -40,7 +43,8 @@ It has four pages, linked from the header:
   counted once), each skill with its level in stars (and why), its years,
   and when you last used it, and the jobs that were counted. Tick the skills
   that aren't on your list yet to add them as core skills at those stars,
-  or ones that are, to take the resume's stars instead of yours. Uploading and reading need the search API
+  or ones that are, to take the resume's stars instead of yours. The skills
+  can be sorted by level (as read) or A–Z. Uploading and reading need the search API
   running. See [Your resume](../backend/README.md#your-resume).
 
 In the tracker you can:

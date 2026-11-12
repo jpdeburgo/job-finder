@@ -294,7 +294,7 @@ describe("filtering and sorting", () => {
 
     await user.click(trigger);
     const options = await screen.findAllByRole("menuitemcheckbox");
-    // Every matched skill once, with how many jobs have it, most common first.
+    // Every matched skill once, A–Z, with how many jobs have it.
     expect(options.map((option) => option.getAttribute("aria-label"))).toEqual([
       "AWS, 1 job", "Java, 1 job", "Python, 1 job", "React, 1 job", "TypeScript, 1 job",
     ]);

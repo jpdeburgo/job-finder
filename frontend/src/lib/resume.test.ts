@@ -10,6 +10,7 @@ import {
   listedAs,
   ratingChange,
   resumeFromDocument,
+  sortDetectedSkills,
   withDetectedSkills,
   type DetectedSkill,
 } from "./resume";
@@ -205,3 +206,17 @@ describe("your skill list", () => {
     expect(result.problem).toMatch(/at most 100 skills, so the rest weren't added/);
   });
 });
+
+describe("sortDetectedSkills", () => {
+  const skills = [skill({ name: "React" }), skill({ name: "aws" }), skill({ name: "Go" })];
+
+  it("keeps the order they were read in (best known first) for level", () => {
+    expect(sortDetectedSkills(skills, "level").map((s) => s.name)).toEqual(["React", "aws", "Go"]);
+  });
+
+  it("sorts A–Z in any case", () => {
+    expect(sortDetectedSkills(skills, "name").map((s) => s.name)).toEqual(["aws", "Go", "React"]);
+    expect(skills.map((s) => s.name)).toEqual(["React", "aws", "Go"]); // not changed in place
+  });
+});
+

@@ -204,6 +204,28 @@ describe("ResumePanel", () => {
     expect(screen.getByRole("button", { name: "Add to your list" })).toBeDisabled();
   });
 
+  it("sorts the skills found A–Z, and remembers it", async () => {
+    const user = setupUser();
+    const { unmount } = renderPanel(resume("parse"));
+    const order = () =>
+      within(screen.getByRole("table", { name: "Skills found" }))
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => row.dataset.skill);
+    const found = resume("parse").analyses.parse!.skills.map((s) => s.name);
+    expect(order()).toEqual(found); // best known first, as read
+
+    await user.click(screen.getByRole("radio", { name: "A–Z" }));
+    expect(order()).toEqual([...found].sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" })));
+    expect(order().slice(0, 3)).toEqual(["AWS", "AWS Lambda", "Django"]);
+
+    unmount();
+    renderPanel(resume("parse"));
+    expect(screen.getByRole("radio", { name: "A–Z" })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("radio", { name: "Level" }));
+    expect(order()).toEqual(found);
+  });
+
   it("uploads pasted text", async () => {
     const user = setupUser();
     renderPanel(null);

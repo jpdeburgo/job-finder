@@ -22,6 +22,7 @@ import {
   MAX_SKILLS,
   MIN_PROFICIENCY,
   cleanSkillName,
+  compareSkillNames,
   fillProficiency,
   type SearchSkills,
 } from "./skills";
@@ -213,6 +214,20 @@ export function describeYearsBasis(analysis: ResumeAnalysis): string {
   }
   if (analysis.years_basis === "stated") return "As the resume states it (no job dates found)";
   return "No job dates or stated years found";
+}
+
+/** How the skills found are listed: best known first (as read), or A–Z. */
+export const DETECTED_SKILL_SORTS = ["level", "name"] as const;
+export type DetectedSkillSort = (typeof DETECTED_SKILL_SORTS)[number];
+export const DETECTED_SKILL_SORT_LABELS: Record<DetectedSkillSort, string> = { level: "Level", name: "A–Z" };
+
+/**
+ * The skills found, in the chosen order. "level" is the order they were
+ * read in (backend/resume_parser.py: most stars, then most years, then most
+ * mentions); "name" is A–Z.
+ */
+export function sortDetectedSkills(skills: readonly DetectedSkill[], sort: DetectedSkillSort): DetectedSkill[] {
+  return sort === "name" ? [...skills].sort((a, b) => compareSkillNames(a.name, b.name)) : [...skills];
 }
 
 // --- Your skill list ----------------------------------------------------------------

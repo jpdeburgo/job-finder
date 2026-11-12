@@ -407,11 +407,20 @@ export function distinctCompanies(jobs: Job[]): FilterOption[] {
     .sort((a, b) => a.value.localeCompare(b.value));
 }
 
+// One collator for every comparison: localeCompare with options builds a new
+// one each call, about 100 times slower, and lists re-sort on every render.
+const skillNameCollator = new Intl.Collator("en", { sensitivity: "base", numeric: true });
+
+/** Skill names in alphabetical order: any case, numbers in order ("Java 8" before "Java 11"). */
+export function compareSkillNames(a: string, b: string): number {
+  return skillNameCollator.compare(a, b);
+}
+
 /**
- * Every skill your jobs matched, with how many matched it, most common first
- * (then A-Z), for the skills filter. Spellings that differ only in case
- * ("Python", "python", saved before and after a change to your list) are one
- * skill, shown the way most jobs have it.
+ * Every skill your jobs matched, A–Z, with how many matched it, for the
+ * skills filter. Spellings that differ only in case ("Python", "python",
+ * saved before and after a change to your list) are one skill, shown the way
+ * most jobs have it.
  */
 export function distinctSkills(jobs: Job[]): FilterOption[] {
   const counts = new Map<string, { count: number; spellings: Map<string, number> }>();
@@ -432,7 +441,7 @@ export function distinctSkills(jobs: Job[]): FilterOption[] {
       value: [...spellings.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0],
       count,
     }))
-    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+    .sort((a, b) => compareSkillNames(a.value, b.value));
 }
 
 /** Distinct track names in first-seen order, for the track filter. */

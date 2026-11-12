@@ -404,13 +404,20 @@ describe("the skills filter", () => {
     expect(hasSkills({ matched_skills: ["Go"] }, ["go", "Rust"], "all")).toBe(false);
   });
 
-  it("lists each skill once with how many jobs have it, most common first", () => {
+  it("lists each skill once, A–Z, with how many jobs have it", () => {
     expect(distinctSkills([...jobs, makeJob({ id: "more", matched_skills: ["Python", "Python", "AWS"] })])).toEqual([
+      { value: "AWS", count: 1 },
       { value: "Python", count: 3 }, // "python" is the same skill; most jobs spell it "Python"
       { value: "React", count: 2 },
-      { value: "AWS", count: 1 },
       { value: "SQL", count: 1 },
     ]);
     expect(distinctSkills([])).toEqual([]);
+  });
+
+  it("sorts skills A–Z in any case, numbers in order", () => {
+    const skillJobs = [makeJob({ id: "a", matched_skills: ["kubernetes", "Java 11", "Backstage", "Java 8", ".NET"] })];
+    expect(distinctSkills(skillJobs).map((option) => option.value)).toEqual([
+      ".NET", "Backstage", "Java 8", "Java 11", "kubernetes",
+    ]);
   });
 });
