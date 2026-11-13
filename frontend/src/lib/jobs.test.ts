@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeJob } from "@/test/factories";
+import salaryFormats from "@/test/fixtures/salary_formats.json";
+import { isSalaryPeriod } from "./types";
 import {
   DEFAULT_FILTERS,
   FIT_LABELS,
@@ -14,14 +16,21 @@ import {
   formatLocation,
   formatSalary,
   formatYears,
+  salaryPeriodNote,
   fitLabel,
   gmailMessageUrl,
   hasApplied,
   insightGlobalSearchUrl,
   jobLinks,
   normalizeJob,
+  hasSalary,
+  salaryLowestSortValue,
   salarySortValue,
   sortJobs,
+  thenByOptions,
+  yearlySalaries,
+  type SalaryFilter,
+  type SortKey,
   sortNewestFirst,
   toIsoString,
   trackLabel,
@@ -84,6 +93,23 @@ describe("normalizeJob", () => {
       applied_at: null,
       notes: null,
       gmail_message_id: "19a1",
+    });
+  });
+
+  it("reads the salary's period, and ignores values it doesn't know", () => {
+    expect(normalizeJob("a", { salary_period: "month", salary_period_estimated: false })).toMatchObject({
+      salary_period: "month",
+      salary_period_estimated: false,
+    });
+    expect(normalizeJob("b", { salary_period: "hour", salary_period_estimated: true })).toMatchObject({
+      salary_period: "hour",
+      salary_period_estimated: true,
+    });
+    // Saved before periods were kept, or something unexpected.
+    expect(normalizeJob("c", {})).toMatchObject({ salary_period: null, salary_period_estimated: false });
+    expect(normalizeJob("d", { salary_period: "fortnight", salary_period_estimated: "yes" })).toMatchObject({
+      salary_period: null,
+      salary_period_estimated: false,
     });
   });
 
@@ -189,12 +215,26 @@ describe("links", () => {
 });
 
 describe("formatting", () => {
-  it("formatSalary matches the wording of the Python email", () => {
-    expect(formatSalary({ salary_low: 100000, salary_high: 120000 })).toBe("$100,000 - $120,000");
-    expect(formatSalary({ salary_low: 0, salary_high: 90 })).toBe("Up to $90");
-    expect(formatSalary({ salary_low: 140000, salary_high: 0 })).toBe("From $140,000");
-    expect(formatSalary({ salary_low: 0, salary_high: 0 })).toBe("Not listed");
-    expect(formatSalary({ salary_low: null, salary_high: null })).toBe("Not listed");
+  it.each(salaryFormats.cases)("formatSalary matches the wording of the Python email: $text", (example) => {
+    const job = {
+      salary_low: example.low,
+      salary_high: example.high,
+      salary_period: isSalaryPeriod(example.period) ? example.period : null,
+      salary_period_estimated: example.estimated,
+    };
+    expect(formatSalary(job)).toBe(example.text);
+  });
+
+  it("salaryPeriodNote explains an assumed period, and nothing else", () => {
+    expect(salaryPeriodNote(makeJob({ salary_low: 64, salary_high: 0, salary_period: "hour", salary_period_estimated: true })))
+      .toBe("Assumed per hour: the site and the posting don't say, and the amount looks like an hourly rate.");
+    expect(salaryPeriodNote(makeJob({ salary_low: 1200, salary_high: 3000, salary_period: "year", salary_period_estimated: true })))
+      .toBe("Assumed per year: the site and the posting don't say, and salaries are taken as yearly unless stated.");
+    // Saved before periods were kept: the same assumption.
+    expect(salaryPeriodNote(makeJob({ salary_low: 1200, salary_high: 3000, salary_period: null })))
+      .toBe("Assumed per year: the site and the posting don't say, and salaries are taken as yearly unless stated.");
+    expect(salaryPeriodNote(makeJob({ salary_period: "month", salary_period_estimated: false }))).toBeNull();
+    expect(salaryPeriodNote(makeJob({ salary_low: 0, salary_high: 0, salary_period: null }))).toBeNull();
   });
 
   it("formatLocation joins city and state", () => {
@@ -235,40 +275,119 @@ describe("sorting", () => {
     expect(sortJobs(jobs, "last_seen").map((j) => j.id)).toEqual(["new", "old", "undated"]);
     expect(sortJobs(jobs, "posted").map((j) => j.id)).toEqual(["old", "new", "undated"]);
     expect(sortJobs(jobs, "salary").map((j) => j.id)).toEqual(["old", "new", "undated"]);
+    expect(sortJobs(jobs, "salary_lowest").map((j) => j.id)).toEqual(["new", "old", "undated"]);
     expect(sortJobs(jobs, "score").map((j) => j.id)).toEqual(["new", "old", "undated"]);
     expect(sortJobs(jobs, "fit").map((j) => j.id)).toEqual(["old", "new", "undated"]);
     expect(sortJobs(jobs, "title").map((j) => j.id)).toEqual(["new", "old", "undated"]);
   });
 
+  // No period: each gets the assumed one, as it's shown (under $300 hourly, else yearly).
+  const salaryJob = (id: string, salary_low: number | null, salary_high: number | null, day: number) =>
+    makeJob({ id, salary_low, salary_high, salary_period: null, last_seen_at: `2026-11-0${day}T00:00:00+00:00` });
+  const salaryJobs = [
+    salaryJob("range", 55, 65, 1), // $114,400 - $135,200 a year
+    salaryJob("not-listed-zeros", 0, 0, 6), // how the search script saves a missing salary
+    salaryJob("from-only", 140000, 0, 2),
+    salaryJob("up-to", 0, 90, 3), // $187,200 a year
+    salaryJob("not-listed-nulls", null, null, 5),
+    salaryJob("not-listed-old", 0, 0, 4),
+  ];
+
   it("sortJobs by salary puts every \"Not listed\" job last", () => {
-    const job = (id: string, salary_low: number | null, salary_high: number | null, day: number) =>
-      makeJob({ id, salary_low, salary_high, last_seen_at: `2026-11-0${day}T00:00:00+00:00` });
-    const jobs = [
-      job("range", 55, 65, 1),
-      job("not-listed-zeros", 0, 0, 6), // how the search script saves a missing salary
-      job("from-only", 140000, 0, 2),
-      job("up-to", 0, 90, 3),
-      job("not-listed-nulls", null, null, 5),
-      job("not-listed-old", 0, 0, 4),
-    ];
-    expect(sortJobs(jobs, "salary").map((j) => j.id)).toEqual([
+    expect(sortJobs(salaryJobs, "salary").map((j) => j.id)).toEqual([
+      "up-to", // $90/hr is $187,200 a year
       "from-only", // "From $140,000" ranks by its only amount, not as 0
-      "up-to",
       "range",
       "not-listed-zeros", // then every "Not listed", newest first
       "not-listed-nulls",
       "not-listed-old",
     ]);
-    expect(sortJobs(jobs, "salary").map(formatSalary).slice(-3)).toEqual(["Not listed", "Not listed", "Not listed"]);
+    expect(sortJobs(salaryJobs, "salary").map(formatSalary).slice(-3)).toEqual(["Not listed", "Not listed", "Not listed"]);
   });
 
-  it("salarySortValue uses the higher listed amount; 0 and null mean not listed", () => {
+  it("sortJobs by lowest salary starts with the lowest pay, still with \"Not listed\" last", () => {
+    expect(sortJobs(salaryJobs, "salary_lowest").map((j) => j.id)).toEqual([
+      "range", // $55/hr: $114,400 a year
+      "from-only",
+      "up-to",
+      "not-listed-zeros",
+      "not-listed-nulls",
+      "not-listed-old",
+    ]);
+  });
+
+  it("sortJobs compares pay per year across hourly, monthly, and yearly jobs", () => {
+    const jobs = [
+      makeJob({ id: "hourly", salary_low: 91, salary_high: 0, salary_period: "hour" }), // $189,280
+      makeJob({ id: "monthly", salary_low: 1200, salary_high: 3000, salary_period: "month" }), // $14,400 - $36,000
+      makeJob({ id: "wide", salary_low: 60000, salary_high: 200000, salary_period: "year" }),
+      makeJob({ id: "narrow", salary_low: 80000, salary_high: 90000, salary_period: "year" }),
+    ];
+    // Highest by the top of each range, lowest by the bottom (same as backend/job_queries.py).
+    expect(sortJobs(jobs, "salary").map((j) => j.id)).toEqual(["wide", "hourly", "narrow", "monthly"]);
+    expect(sortJobs(jobs, "salary_lowest").map((j) => j.id)).toEqual(["monthly", "wide", "narrow", "hourly"]);
+  });
+
+  it.each(salaryFormats.per_year)("yearlySalaries matches the Python side: $low-$high per $period", (example) => {
+    const job = {
+      salary_low: example.low,
+      salary_high: example.high,
+      salary_period: isSalaryPeriod(example.period) ? example.period : null,
+    };
+    expect(yearlySalaries(job)).toEqual(example.yearly);
+  });
+
+  it("salarySortValue uses the higher listed amount per year; 0 and null mean not listed", () => {
     expect(salarySortValue({ salary_low: 100000, salary_high: 120000 })).toBe(120000);
     expect(salarySortValue({ salary_low: 140000, salary_high: 0 })).toBe(140000);
-    expect(salarySortValue({ salary_low: 0, salary_high: 90 })).toBe(90);
-    expect(salarySortValue({ salary_low: null, salary_high: 90 })).toBe(90);
+    expect(salarySortValue({ salary_low: 0, salary_high: 90 })).toBe(187200); // assumed hourly
+    expect(salarySortValue({ salary_low: null, salary_high: 90, salary_period: "hour" })).toBe(187200);
+    expect(salarySortValue({ salary_low: 1200, salary_high: 3000, salary_period: "month" })).toBe(36000);
     expect(salarySortValue({ salary_low: 0, salary_high: 0 })).toBeNull();
     expect(salarySortValue({ salary_low: null, salary_high: null })).toBeNull();
+  });
+
+  it("salaryLowestSortValue uses the lower listed amount per year", () => {
+    expect(salaryLowestSortValue({ salary_low: 1200, salary_high: 3000, salary_period: "month" })).toBe(14400);
+    expect(salaryLowestSortValue({ salary_low: 140000, salary_high: 0 })).toBe(140000);
+    expect(salaryLowestSortValue({ salary_low: 0, salary_high: 0 })).toBeNull();
+  });
+
+  it("sortJobs by several keys orders the ties of the ones before (same as backend/job_queries.py)", () => {
+    const job = (id: string, score: number, salary: number, day: number) =>
+      makeJob({
+        id,
+        score,
+        salary_low: salary,
+        salary_high: 0,
+        salary_period: salary ? "year" : null,
+        last_seen_at: `2026-11-0${day}T00:00:00+00:00`,
+      });
+    const jobs = [
+      job("two-low", 2, 80000, 1),
+      job("three-low", 3, 70000, 2),
+      job("two-high", 2, 150000, 3),
+      job("three-high", 3, 120000, 4),
+      job("two-none", 2, 0, 5),
+      job("two-high-older", 2, 150000, 2),
+    ];
+    const ids = (keys: SortKey[]) => sortJobs(jobs, keys).map((j) => j.id);
+
+    // Most skill matches, then highest salary; "Not listed" last among its ties; full ties newest first.
+    expect(ids(["score", "salary"])).toEqual(["three-high", "three-low", "two-high", "two-high-older", "two-low", "two-none"]);
+    // The order of the keys matters.
+    expect(ids(["salary", "score"])).toEqual(["two-high", "two-high-older", "three-high", "two-low", "three-low", "two-none"]);
+    expect(ids(["score", "salary_lowest"])).toEqual(["three-low", "three-high", "two-low", "two-high", "two-high-older", "two-none"]);
+    // One key, alone or in a list, is the same sort.
+    expect(ids(["score"])).toEqual(sortJobs(jobs, "score").map((j) => j.id));
+  });
+
+  it("thenByOptions leaves out the first sort, its other salary direction, and Last seen", () => {
+    const values = (primary: SortKey) => thenByOptions(primary).map((option) => option.value);
+    expect(values("score")).toEqual(["posted", "salary", "salary_lowest", "fit", "title", "status"]);
+    expect(values("salary")).toEqual(["posted", "score", "fit", "title", "status"]);
+    expect(values("salary_lowest")).toEqual(["posted", "score", "fit", "title", "status"]);
+    expect(values("last_seen")).toEqual(["posted", "salary", "salary_lowest", "score", "fit", "title", "status"]);
   });
 
   it("sortJobs by status follows the workflow order, unknown statuses last", () => {
@@ -338,6 +457,20 @@ describe("filtering", () => {
       { value: "Accenture", count: 1 },
       { value: "Insight Global", count: 2 },
     ]);
+  });
+
+  it("filters by whether a salary is listed", () => {
+    const mixed = [
+      makeJob({ id: "paid", salary_low: 60, salary_high: 65 }),
+      makeJob({ id: "zeros", salary_low: 0, salary_high: 0 }), // how the search script saves a missing salary
+      makeJob({ id: "nulls", salary_low: null, salary_high: null }),
+      makeJob({ id: "up-to", salary_low: 0, salary_high: 90 }),
+    ];
+    const ids = (salary: SalaryFilter) => filterJobs(mixed, { ...DEFAULT_FILTERS, salary }).map((j) => j.id);
+    expect(ids("all")).toEqual(["paid", "zeros", "nulls", "up-to"]);
+    expect(ids("listed")).toEqual(["paid", "up-to"]);
+    expect(ids("not_listed")).toEqual(["zeros", "nulls"]);
+    expect(hasSalary(mixed[1])).toBe(false);
   });
 
   it("filters by status and track", () => {

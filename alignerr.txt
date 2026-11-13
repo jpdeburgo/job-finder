@@ -1,9 +1,5 @@
 Description:
-We will be adding resume ingestion and skill detection. Next I want to implement adding a resume and being able to determine the skills and years of experience that a user has based off of their resume.
-
-I want to be able to do this by using AI and by just parsing the document and determining the skills and years of experience. 
-
-If we can not find a free AI integration then we will just have to determine that it worked based off of the manual parsing version
+I want to add more job boards to the platform. I have done some research and added ./new_job_boards.py. It has a bunch of new job boards from a myriad of resources. I want to add those job boards to the platform
 
 Completeion:
 Run these commands in two different terminals:
@@ -11,6 +7,7 @@ cd backend/ && pipenv install && pipenv run python job_search.py --local && pipe
 
 cd frontend/ && npm install && npm run dev
 
-You can judge this is complete by uploading your resume and seeing if the skills and years of experience were properly 
+The most if not all of the job boards in ./new_job_boards.py are available in the platform. They should show up in ./backend/local_firestore.py
 
 Next Prompts:
+If the period is not stated, you can assume that is the annual salary

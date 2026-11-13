@@ -14,6 +14,7 @@ import {
   formatDate,
   formatLocation,
   formatSalary,
+  salaryPeriodNote,
   formatYears,
   gmailMessageUrl,
   insightGlobalSearchUrl,
@@ -155,7 +156,12 @@ export function JobDetails({ job, busy, onStatusChange, onNotesSave, onArrangeme
           <Field label="Track">{job.track ?? "—"}</Field>
           <Field label="Location">{formatLocation(job)}</Field>
           <Field label="Job type">{job.job_type ?? "—"}</Field>
-          <Field label="Salary">{formatSalary(job)}</Field>
+          <Field label="Salary">
+            {formatSalary(job)}
+            {salaryPeriodNote(job) && (
+              <span className="text-muted-foreground block text-xs">{salaryPeriodNote(job)}</span>
+            )}
+          </Field>
           <Field label="Experience">{formatYears(job.min_years)}</Field>
           <Field label="Posted">{formatDate(job.posted_date)}</Field>
           <Field label="First seen">

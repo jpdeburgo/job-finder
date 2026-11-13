@@ -4,8 +4,8 @@
  * everything is trivially unit-testable and usable on both server and client.
  */
 
-import type { Job, JobStatus } from "./types";
-import { JOB_STATUSES, WORK_ARRANGEMENT_LABELS, isWorkArrangement } from "./types";
+import type { Job, JobStatus, SalaryPeriod } from "./types";
+import { JOB_STATUSES, WORK_ARRANGEMENT_LABELS, isSalaryPeriod, isWorkArrangement } from "./types";
 
 // --- Normalisation ----------------------------------------------------------
 
@@ -89,6 +89,8 @@ export function normalizeJob(id: string, data: Record<string, unknown>): Job {
     job_type: asString(data.job_type),
     salary_low: asNumber(data.salary_low),
     salary_high: asNumber(data.salary_high),
+    salary_period: isSalaryPeriod(data.salary_period) ? data.salary_period : null,
+    salary_period_estimated: data.salary_period_estimated === true,
     url: asString(data.url),
     track: asString(data.track),
     posted_date: asString(data.posted_date),
@@ -189,15 +191,74 @@ export function jobLinks(job: Job): JobLink[] {
 
 // --- Formatting -----------------------------------------------------------------
 
-/** Same wording as `format_salary` in backend/job_search.py. */
-export function formatSalary(job: Pick<Job, "salary_low" | "salary_high">): string {
+type SalaryFields = Pick<Job, "salary_low" | "salary_high"> &
+  Partial<Pick<Job, "salary_period" | "salary_period_estimated">>;
+
+// Same as PERIOD_SUFFIXES in backend/salary.py.
+const PERIOD_SUFFIXES: Record<SalaryPeriod, string> = {
+  hour: "/hr",
+  day: "/day",
+  week: "/wk",
+  month: "/mo",
+  year: "/yr",
+};
+
+const PERIOD_WORDS: Record<SalaryPeriod, string> = {
+  hour: "per hour",
+  day: "per day",
+  week: "per week",
+  month: "per month",
+  year: "per year",
+};
+
+/** Same as MAX_HOURLY in backend/salary.py: with no stated period, amounts under this are hourly, the rest yearly. */
+const MAX_HOURLY = 300;
+
+/** The period assumed when nothing states one (`estimate_period` in backend/salary.py). */
+function assumedPeriod(low: number, high: number): SalaryPeriod {
+  return Math.max(low, high) < MAX_HOURLY ? "hour" : "year";
+}
+
+/** "$64", "$64.50", "$120,000" (same as `_money` in backend/salary.py). */
+function money(value: number): string {
+  const cents = !Number.isInteger(value) && value < 1000;
+  return `$${value.toLocaleString("en-US", {
+    minimumFractionDigits: cents ? 2 : 0,
+    maximumFractionDigits: cents ? 2 : 0,
+  })}`;
+}
+
+/**
+ * "$60 - $65/hr", "From $140,000/yr", "$1,200 - $3,000/mo", or "From $64/hr (est.)" /
+ * "$1,200 - $3,000/yr (est.)" when the period is assumed (also for jobs saved
+ * before periods were kept). Same wording as `format_salary` in backend/salary.py.
+ */
+export function formatSalary(job: SalaryFields): string {
   const low = job.salary_low ?? 0;
   const high = job.salary_high ?? 0;
-  const money = (value: number) => `$${Math.round(value).toLocaleString("en-US")}`;
   if (!low && !high) return "Not listed";
-  if (!low) return `Up to ${money(high)}`;
-  if (!high) return `From ${money(low)}`;
-  return `${money(low)} - ${money(high)}`;
+  let amount: string;
+  if (!low) amount = `Up to ${money(high)}`;
+  else if (!high) amount = `From ${money(low)}`;
+  else if (high === low) amount = money(low);
+  else amount = `${money(low)} - ${money(high)}`;
+  const period = job.salary_period ?? assumedPeriod(low, high);
+  const estimated = !job.salary_period || job.salary_period_estimated;
+  return `${amount}${PERIOD_SUFFIXES[period]}${estimated ? " (est.)" : ""}`;
+}
+
+/**
+ * Why a salary's period is marked "(est.)": the site and posting don't say,
+ * so it's assumed. Null when the site or posting states it (or there's no salary).
+ */
+export function salaryPeriodNote(job: SalaryFields): string | null {
+  const low = job.salary_low ?? 0;
+  const high = job.salary_high ?? 0;
+  if (!low && !high) return null;
+  if (job.salary_period && !job.salary_period_estimated) return null;
+  const period = job.salary_period ?? assumedPeriod(low, high);
+  const why = period === "hour" ? "the amount looks like an hourly rate" : "salaries are taken as yearly unless stated";
+  return `Assumed ${PERIOD_WORDS[period]}: the site and the posting don't say, and ${why}.`;
 }
 
 export function formatLocation(job: Pick<Job, "city" | "state">): string {
@@ -244,12 +305,17 @@ export function formatYears(minYears: number | null): string {
 
 // --- Sorting --------------------------------------------------------------------
 
-export type SortKey = "last_seen" | "posted" | "salary" | "score" | "fit" | "title" | "status";
+/** `salary` is highest first, `salary_lowest` lowest first (same keys as backend/job_queries.py). */
+export type SortKey = "last_seen" | "posted" | "salary" | "salary_lowest" | "score" | "fit" | "title" | "status";
 
-export const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+const SALARY_SORT_HINT =
+  'Pay is compared per year: $50/hr counts as $104,000, $3,000/mo as $36,000. "Not listed" goes last.';
+
+export const SORT_OPTIONS: { value: SortKey; label: string; hint?: string }[] = [
   { value: "last_seen", label: "Last seen (newest)" },
   { value: "posted", label: "Posted (newest)" },
-  { value: "salary", label: "Salary (highest)" },
+  { value: "salary", label: "Salary (highest)", hint: SALARY_SORT_HINT },
+  { value: "salary_lowest", label: "Salary (lowest)", hint: SALARY_SORT_HINT },
   { value: "score", label: "Skill matches (most)" },
   { value: "fit", label: "Best fit" },
   { value: "title", label: "Title (A–Z)" },
@@ -265,40 +331,97 @@ export function sortNewestFirst(jobs: Job[]): Job[] {
   return [...jobs].sort((a, b) => seenKey(b).localeCompare(seenKey(a)));
 }
 
+// How many of each period make a year (same as PER_YEAR in backend/salary.py).
+const PER_YEAR: Record<SalaryPeriod, number> = { hour: 2080, day: 260, week: 52, month: 12, year: 1 };
+
 /**
- * What "Salary (highest)" sorts by: the higher of the two amounts that are
- * actually set, so "From $140,000" counts as 140,000. The search script saves
- * a missing amount as 0, so 0 and null both mean "not listed" (null here).
+ * The listed amounts as yearly pay, so pay per hour, month, and year compare
+ * fairly: $50/hr is 104,000, $3,000/mo 36,000. A job with no period gets the
+ * assumed one, as it's shown. The search script saves a missing amount as 0,
+ * so 0 and null both mean "not listed" (an empty list). Same as
+ * `yearly_amounts` in backend/salary.py.
  */
-export function salarySortValue(job: Pick<Job, "salary_low" | "salary_high">): number | null {
-  const amounts = [job.salary_high, job.salary_low].filter((value): value is number => value != null && value > 0);
+export function yearlySalaries(job: SalaryFields): number[] {
+  const amounts = [job.salary_low, job.salary_high].filter((value): value is number => value != null && value > 0);
+  if (!amounts.length) return [];
+  const period = job.salary_period ?? assumedPeriod(Math.max(...amounts), 0);
+  return amounts.map((amount) => amount * PER_YEAR[period]);
+}
+
+/** Whether a job lists a salary (an amount above 0). */
+export function hasSalary(job: SalaryFields): boolean {
+  return yearlySalaries(job).length > 0;
+}
+
+/**
+ * What "Salary (highest)" sorts by: the higher listed amount, per year, so
+ * "From $140,000" counts as 140,000 and "$60/hr" as 124,800. Null when no
+ * salary is listed.
+ */
+export function salarySortValue(job: SalaryFields): number | null {
+  const amounts = yearlySalaries(job);
   return amounts.length ? Math.max(...amounts) : null;
 }
 
-export function sortJobs(jobs: Job[], key: SortKey): Job[] {
-  const byNewest = sortNewestFirst(jobs);
-  const compareNumberDesc = (a: number | null, b: number | null) => (b ?? -1) - (a ?? -1);
-  switch (key) {
-    case "last_seen":
-      return byNewest;
-    case "posted":
-      return byNewest.sort((a, b) => (b.posted_date ?? "").localeCompare(a.posted_date ?? ""));
-    case "salary":
-      // Highest first; "Not listed" always last (newest first among them).
-      return byNewest.sort((a, b) => {
-        const [salaryA, salaryB] = [salarySortValue(a), salarySortValue(b)];
-        if (salaryA === null || salaryB === null) return (salaryA === null ? 1 : 0) - (salaryB === null ? 1 : 0);
-        return salaryB - salaryA;
-      });
-    case "score":
-      return byNewest.sort((a, b) => compareNumberDesc(a.score, b.score));
-    case "fit":
-      return byNewest.sort((a, b) => compareNumberDesc(a.fit_score, b.fit_score));
-    case "title":
-      return byNewest.sort((a, b) => (a.title ?? "\uffff").localeCompare(b.title ?? "\uffff"));
-    case "status":
-      return byNewest.sort((a, b) => statusOrder(a.status) - statusOrder(b.status));
-  }
+/** What "Salary (lowest)" sorts by: the lower listed amount, per year. Null when no salary is listed. */
+export function salaryLowestSortValue(job: SalaryFields): number | null {
+  const amounts = yearlySalaries(job);
+  return amounts.length ? Math.min(...amounts) : null;
+}
+
+/** Orders by `value` (1: lowest first, -1: highest first), "Not listed" (null) always last. */
+function compareSalaries(value: (job: Job) => number | null, direction: 1 | -1) {
+  return (a: Job, b: Job) => {
+    const [salaryA, salaryB] = [value(a), value(b)];
+    if (salaryA === null || salaryB === null) return (salaryA === null ? 1 : 0) - (salaryB === null ? 1 : 0);
+    return direction * (salaryA - salaryB);
+  };
+}
+
+const compareNumberDesc = (a: number | null, b: number | null) => (b ?? -1) - (a ?? -1);
+
+/** How each sort key orders two jobs (negative: `a` first). Missing values always go last. */
+const COMPARE: Record<SortKey, (a: Job, b: Job) => number> = {
+  last_seen: (a, b) => seenKey(b).localeCompare(seenKey(a)),
+  posted: (a, b) => (b.posted_date ?? "").localeCompare(a.posted_date ?? ""),
+  // Highest first; "Not listed" always last.
+  salary: compareSalaries(salarySortValue, -1),
+  // Lowest first; "Not listed" still last.
+  salary_lowest: compareSalaries(salaryLowestSortValue, 1),
+  score: (a, b) => compareNumberDesc(a.score, b.score),
+  fit: (a, b) => compareNumberDesc(a.fit_score, b.fit_score),
+  title: (a, b) => (a.title ?? "\uffff").localeCompare(b.title ?? "\uffff"),
+  status: (a, b) => statusOrder(a.status) - statusOrder(b.status),
+};
+
+/**
+ * Sort by one key, or by several in order: each key orders the jobs the keys
+ * before it tie on, so `["score", "salary"]` is most skill matches first, and
+ * the highest salary first among jobs with the same number. Jobs that tie on
+ * every key stay newest first. Same as `sort_jobs` in backend/job_queries.py.
+ */
+export function sortJobs(jobs: Job[], sort: SortKey | readonly SortKey[]): Job[] {
+  const keys = typeof sort === "string" ? [sort] : sort;
+  // Array sort is stable, so ties keep the newest-first order.
+  return sortNewestFirst(jobs).sort((a, b) => {
+    for (const key of keys) {
+      const order = COMPARE[key](a, b);
+      if (order !== 0) return order;
+    }
+    return 0;
+  });
+}
+
+/**
+ * What "Then by" offers after `primary`: every other sort, except "Last seen"
+ * (ties already end newest first) and the other direction of a salary sort.
+ */
+export function thenByOptions(primary: SortKey): typeof SORT_OPTIONS {
+  const salary: SortKey[] = ["salary", "salary_lowest"];
+  return SORT_OPTIONS.filter(
+    ({ value }) =>
+      value !== primary && value !== "last_seen" && !(salary.includes(primary) && salary.includes(value)),
+  );
 }
 
 function statusOrder(status: string): number {
@@ -320,9 +443,19 @@ export interface JobFilters {
   skills: string[];
   /** "any": jobs with at least one of `skills`; "all": jobs with every one. */
   skillMatch: SkillMatch;
+  /** Only jobs with a salary listed, or only "Not listed" ones. */
+  salary: SalaryFilter;
 }
 
 export type SkillMatch = "any" | "all";
+
+export type SalaryFilter = "all" | "listed" | "not_listed";
+
+export const SALARY_FILTER_LABELS: Record<SalaryFilter, string> = {
+  all: "Any",
+  listed: "Listed",
+  not_listed: "Not listed",
+};
 
 export const DEFAULT_FILTERS: JobFilters = {
   query: "",
@@ -332,6 +465,7 @@ export const DEFAULT_FILTERS: JobFilters = {
   track: "all",
   skills: [],
   skillMatch: "any",
+  salary: "all",
 };
 
 /** Whether ``value`` is one of ``options``, in any case. */
@@ -356,6 +490,7 @@ export function filterJobs(jobs: Job[], filters: JobFilters): Job[] {
     if (filters.remote !== "all" && remoteStatus(job) !== filters.remote) return false;
     if (filters.track !== "all" && job.track !== filters.track) return false;
     if (!hasSkills(job, filters.skills, filters.skillMatch)) return false;
+    if (filters.salary !== "all" && hasSalary(job) !== (filters.salary === "listed")) return false;
     if (!query) return true;
     const haystack = [
       job.title,

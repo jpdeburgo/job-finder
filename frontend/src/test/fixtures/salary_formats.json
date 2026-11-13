@@ -1,0 +1,178 @@
+{
+  "_comment": "How a salary reads in the email (backend/salary.py format_salary) and the dashboard (frontend/src/lib/jobs.ts formatSalary), and what it's worth per year for sorting and filtering (salary.yearly_amounts / yearlySalaries). Both test suites check every case, so the two can't drift apart.",
+  "cases": [
+    {
+      "low": 0,
+      "high": 0,
+      "period": null,
+      "estimated": false,
+      "text": "Not listed"
+    },
+    {
+      "low": null,
+      "high": null,
+      "period": null,
+      "estimated": false,
+      "text": "Not listed"
+    },
+    {
+      "low": 60,
+      "high": 65,
+      "period": "hour",
+      "estimated": false,
+      "text": "$60 - $65/hr"
+    },
+    {
+      "low": 64,
+      "high": 0,
+      "period": "hour",
+      "estimated": true,
+      "text": "From $64/hr (est.)"
+    },
+    {
+      "low": 64.5,
+      "high": 0,
+      "period": "hour",
+      "estimated": false,
+      "text": "From $64.50/hr"
+    },
+    {
+      "low": 0,
+      "high": 90,
+      "period": "hour",
+      "estimated": false,
+      "text": "Up to $90/hr"
+    },
+    {
+      "low": 500,
+      "high": 500,
+      "period": "day",
+      "estimated": false,
+      "text": "$500/day"
+    },
+    {
+      "low": 2000,
+      "high": 2500,
+      "period": "week",
+      "estimated": false,
+      "text": "$2,000 - $2,500/wk"
+    },
+    {
+      "low": 1200,
+      "high": 3000,
+      "period": "month",
+      "estimated": false,
+      "text": "$1,200 - $3,000/mo"
+    },
+    {
+      "low": 1200,
+      "high": 3000,
+      "period": "year",
+      "estimated": true,
+      "text": "$1,200 - $3,000/yr (est.)"
+    },
+    {
+      "_comment": "Saved before periods were kept: the assumed period.",
+      "low": 1200,
+      "high": 3000,
+      "period": null,
+      "estimated": false,
+      "text": "$1,200 - $3,000/yr (est.)"
+    },
+    {
+      "low": 64,
+      "high": 0,
+      "period": null,
+      "estimated": false,
+      "text": "From $64/hr (est.)"
+    },
+    {
+      "low": 100000,
+      "high": 120000,
+      "period": "year",
+      "estimated": false,
+      "text": "$100,000 - $120,000/yr"
+    },
+    {
+      "low": 140000,
+      "high": 0,
+      "period": "year",
+      "estimated": true,
+      "text": "From $140,000/yr (est.)"
+    }
+  ],
+  "per_year": [
+    {
+      "low": 55,
+      "high": 65,
+      "period": "hour",
+      "yearly": [
+        114400,
+        135200
+      ]
+    },
+    {
+      "low": 64,
+      "high": 0,
+      "period": null,
+      "yearly": [
+        133120
+      ]
+    },
+    {
+      "low": 500,
+      "high": 0,
+      "period": "day",
+      "yearly": [
+        130000
+      ]
+    },
+    {
+      "low": 2000,
+      "high": 2500,
+      "period": "week",
+      "yearly": [
+        104000,
+        130000
+      ]
+    },
+    {
+      "low": 1200,
+      "high": 3000,
+      "period": "month",
+      "yearly": [
+        14400,
+        36000
+      ]
+    },
+    {
+      "low": 1200,
+      "high": 3000,
+      "period": null,
+      "yearly": [
+        1200,
+        3000
+      ]
+    },
+    {
+      "low": 140000,
+      "high": 0,
+      "period": "year",
+      "yearly": [
+        140000
+      ]
+    },
+    {
+      "low": 0,
+      "high": 0,
+      "period": null,
+      "yearly": []
+    },
+    {
+      "low": null,
+      "high": null,
+      "period": null,
+      "yearly": []
+    }
+  ]
+}

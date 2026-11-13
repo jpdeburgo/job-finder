@@ -4,7 +4,17 @@ import pytest
 
 import job_boards
 import job_search
-from job_sites import GreenhouseSite, InsightGlobalSite, WorkdaySite, resolve_job_site
+from job_sites import (
+    AshbySite,
+    GreenhouseSite,
+    HimalayasSite,
+    InsightGlobalSite,
+    JobicySite,
+    RemoteOkSite,
+    WeWorkRemotelySite,
+    WorkdaySite,
+    resolve_job_site,
+)
 
 BOARD_CONSTANTS = {
     name: value
@@ -40,7 +50,7 @@ def test_every_board_constant_is_searched():
     missing = [name for name, url in BOARD_CONSTANTS.items() if url not in job_boards.JOB_SEARCH_URLS]
     assert missing == [], f"defined in job_boards.py but not in JOB_SEARCH_URLS: {missing}"
     assert len(job_boards.JOB_SEARCH_URLS) == len(set(job_boards.JOB_SEARCH_URLS)), "duplicate URL"
-    assert len(job_boards.JOB_SEARCH_URLS) == 20
+    assert len(job_boards.JOB_SEARCH_URLS) == 43
 
 
 @pytest.mark.parametrize("url", job_boards.JOB_SEARCH_URLS)
@@ -66,10 +76,26 @@ def test_boards_resolve_to_the_expected_readers():
     assert kinds[GreenhouseSite] == [
         "Gitlab", "Cloudflare", "Datadog", "Reddit", "Duolingo", "Databricks", "Figma",
         "Vercel", "Robinhood", "Coinbase", "Discord", "Greenhouse",
+        "Airbnb", "Anthropic", "Doordashusa", "Stripe", "Automattic", "Webflow",
+        "Pinterest", "Instacart", "Brex",
     ]
-    # Job IDs are prefixed per company, so boards can't collide.
-    prefixes = [site.id_prefix for site in sites]
-    assert len(prefixes) == len(set(prefixes))
+    assert kinds[AshbySite] == ["Supabase", "Posthog", "Zapier", "Linear", "Ashby", "Openai"]
+    assert kinds[HimalayasSite] == ["Himalayas", "Himalayas (Part Time)"]
+    assert kinds[RemoteOkSite] == ["Remote OK"]
+    assert kinds[JobicySite] == ["Jobicy"]
+    assert kinds[WeWorkRemotelySite] == [
+        "We Work Remotely (Programming)", "We Work Remotely (Full Stack Programming)",
+        "We Work Remotely (Back End Programming)", "We Work Remotely (Front End Programming)",
+    ]
+    # Job IDs are prefixed per company (or job board), so two sources can't
+    # collide. Feeds of one job board share its prefix, so a job listed in
+    # two of them is saved once.
+    sources: dict[str, set[type]] = {}
+    for site in sites:
+        sources.setdefault(site.id_prefix, set()).add(type(site))
+    assert all(len(types) == 1 for types in sources.values()), sources
+    shared = {prefix for prefix in sources if sum(s.id_prefix == prefix for s in sites) > 1}
+    assert shared == {"himalayas-", "we-work-remotely-"}
 
 
 def test_greenhouse_and_workday_boards_point_at_their_apis():
@@ -86,3 +112,20 @@ def test_greenhouse_and_workday_boards_point_at_their_apis():
     )
     # Workday boards are narrowed to JOB_COUNTRY by the board's own filter.
     assert sites[job_boards.WALMART_URL].country == job_search.JOB_COUNTRY
+
+
+def test_ashby_and_remote_boards_point_at_their_apis():
+    sites = {
+        site.search_url: site
+        for site in job_search.resolve_sites(NoNetworkSession(), urls=job_boards.JOB_SEARCH_URLS)
+    }
+
+    assert sites[job_boards.SUPABASE_URL].api_url == (
+        "https://api.ashbyhq.com/posting-api/job-board/supabase"
+    )
+    assert sites[job_boards.HIMALAYAS_URL].params == {"sort": "recent", "country": "US"}
+    assert sites[job_boards.HIMALAYAS_PART_TIME_URL].params["employment_type"] == "Part Time"
+    assert sites[job_boards.JOBICY_URL].params == {
+        "count": "100", "geo": "usa", "industry": "engineering",
+    }
+    assert sites[job_boards.WWR_BACK_END_URL].api_url == job_boards.WWR_BACK_END_URL

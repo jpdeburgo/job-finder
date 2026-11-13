@@ -12,16 +12,18 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any, Iterable, Literal, get_args
+from typing import Any, Iterable, Literal, Sequence, get_args
 
 from job_store import JOB_STATUSES, STATUS_APPLIED, WORK_ARRANGEMENTS
+from salary import yearly_amounts
 
 TIMESTAMP_FIELDS = (
     "first_seen_at", "last_seen_at", "emailed_at", "applied_at", "status_updated_at",
     "work_arrangement_set_at",
 )
 # Same keys and directions as the dashboard's Sort menu.
-SortKey = Literal["last_seen", "posted", "salary", "score", "fit", "title", "status"]
+# "salary" is highest first, "salary_lowest" lowest first.
+SortKey = Literal["last_seen", "posted", "salary", "salary_lowest", "score", "fit", "title", "status"]
 SORT_KEYS: tuple[str, ...] = get_args(SortKey)
 RemoteStatus = Literal["remote", "unmarked", "not_remote"]
 REMOTE_STATUSES: tuple[str, ...] = get_args(RemoteStatus)
@@ -100,6 +102,10 @@ def normalize_job(doc_id: str, data: dict[str, Any]) -> dict[str, Any]:
         "job_type": _string(data.get("job_type")),
         "salary_low": _number(data.get("salary_low")),
         "salary_high": _number(data.get("salary_high")),
+        # "hour" | "day" | "week" | "month" | "year"; None when it can't be told
+        # (or the job was saved before periods were kept).
+        "salary_period": _string(data.get("salary_period")) or None,
+        "salary_period_estimated": data.get("salary_period_estimated") is True,
         "url": _string(data.get("url")),
         "track": _string(data.get("track")),
         "posted_date": _string(data.get("posted_date")),
@@ -137,15 +143,25 @@ def has_applied(job: dict[str, Any]) -> bool:
     return job.get("status") == STATUS_APPLIED or job.get("applied_at") is not None
 
 
+def _yearly_salaries(job: dict[str, Any]) -> list[float]:
+    """The listed amounts as yearly pay ($50/hr is 104,000), so pay per hour,
+    month, and year compare fairly. The search script saves a missing amount
+    as 0, so 0 and ``None`` both mean "not listed" (an empty list)."""
+    return yearly_amounts(job.get("salary_low"), job.get("salary_high"), job.get("salary_period"))
+
+
 def salary_sort_value(job: dict[str, Any]) -> float | None:
-    """The higher of the amounts actually listed. The search script saves a
-    missing amount as 0, so 0 and ``None`` both mean "not listed" (``None``)."""
-    amounts = [
-        value
-        for value in (job.get("salary_high"), job.get("salary_low"))
-        if isinstance(value, (int, float)) and value > 0
-    ]
+    """What "Salary (highest)" sorts by and ``min_salary`` compares: the
+    higher listed amount, per year. ``None`` when no salary is listed."""
+    amounts = _yearly_salaries(job)
     return max(amounts) if amounts else None
+
+
+def salary_lowest_sort_value(job: dict[str, Any]) -> float | None:
+    """What "Salary (lowest)" sorts by: the lower listed amount, per year
+    ("From $140,000" counts as 140,000). ``None`` when no salary is listed."""
+    amounts = _yearly_salaries(job)
+    return min(amounts) if amounts else None
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -195,6 +211,8 @@ class JobFilters:
     remote: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     min_salary: float | None = None
+    # True: only jobs with a salary listed; False: only "Not listed" ones.
+    salary_listed: bool | None = None
     posted_since: date | None = None
     seen_since: date | None = None
     applied: bool | None = None
@@ -218,6 +236,8 @@ class JobFilters:
             salary = salary_sort_value(job)
             if salary is None or salary < self.min_salary:
                 return False
+        if self.salary_listed is not None and (salary_sort_value(job) is not None) != self.salary_listed:
+            return False
         if self.posted_since is not None:
             posted = _parse_date(job["posted_date"])
             if posted is None or posted < self.posted_since:
@@ -248,21 +268,41 @@ def _status_order(status: str) -> int:
     return JOB_STATUSES.index(status) if status in JOB_STATUSES else len(JOB_STATUSES)
 
 
-def sort_jobs(jobs: Iterable[dict[str, Any]], key: str = "last_seen") -> list[dict[str, Any]]:
-    """Sort like the dashboard: newest ``last_seen_at`` first, then by ``key``
-    (Python's sort is stable, so ties stay newest first).
+def sort_jobs(
+    jobs: Iterable[dict[str, Any]], key: str | Sequence[str] = "last_seen"
+) -> list[dict[str, Any]]:
+    """Sort like the dashboard: by ``key``, or by several keys in order (each
+    one orders the jobs the keys before it tie on: ``["score", "salary"]`` is
+    most skill matches first, and the highest salary first among jobs with the
+    same number). Jobs that tie on every key stay newest ``last_seen_at`` first.
 
-    ``posted``/``score``/``fit``/``salary`` are highest first, ``title`` A-Z, ``status``
-    in workflow order. Jobs missing the value always go last.
+    ``posted``/``score``/``fit``/``salary`` are highest first, ``salary_lowest``
+    lowest first, ``title`` A-Z, ``status`` in workflow order. Salaries compare
+    per year. Jobs missing the value ("Not listed") always go last.
     """
-    if key not in SORT_KEYS:
-        raise ValueError(f"Unknown sort {key!r}; expected one of {', '.join(SORT_KEYS)}")
+    keys = [key] if isinstance(key, str) else list(key)
+    unknown = [k for k in keys if k not in SORT_KEYS]
+    if unknown:
+        raise ValueError(
+            f"Unknown sort {', '.join(map(repr, unknown))}; expected one of {', '.join(SORT_KEYS)}"
+        )
     ordered = sorted(jobs, key=_seen_key, reverse=True)
+    # Python's sort is stable: sorting by the last key first, then each one
+    # before it, leaves every key ordering the ties of the ones before it.
+    for k in reversed(keys):
+        _sort_by(ordered, k)
+    return ordered
+
+
+def _sort_by(ordered: list[dict[str, Any]], key: str) -> None:
+    """Sort ``ordered`` in place by one key (stable: ties keep their order)."""
     if key == "posted":
         # reverse=True keeps the sort stable; undated jobs ("") end up last.
         ordered.sort(key=lambda job: job["posted_date"] or "", reverse=True)
     elif key == "salary":
         ordered.sort(key=lambda job: (salary_sort_value(job) is None, -(salary_sort_value(job) or 0)))
+    elif key == "salary_lowest":
+        ordered.sort(key=lambda job: (salary_lowest_sort_value(job) is None, salary_lowest_sort_value(job) or 0))
     elif key == "score":
         ordered.sort(key=lambda job: (job["score"] is None, -(job["score"] or 0)))
     elif key == "fit":
@@ -271,7 +311,6 @@ def sort_jobs(jobs: Iterable[dict[str, Any]], key: str = "last_seen") -> list[di
         ordered.sort(key=lambda job: (job["title"] is None, (job["title"] or "").lower()))
     elif key == "status":
         ordered.sort(key=lambda job: _status_order(job["status"]))
-    return ordered
 
 
 # --- Counting ------------------------------------------------------------------------

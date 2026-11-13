@@ -292,3 +292,50 @@ def test_changing_only_your_proficiency_rescores_the_fit(store):
     # Which jobs match doesn't depend on proficiency.
     assert after["matched_skills"] == before["matched_skills"] and after["matches_skills"] is True
     assert summary.changed == 1  # the Go job mentions none of those skills: unchanged
+
+
+# --- Salary periods for saved jobs ---------------------------------------------------------
+
+
+def test_reassessing_gives_saved_jobs_a_salary_period(tmp_path):
+    """Jobs saved before salary periods were kept get one from their posting
+    or amount; a period the site stated is left alone. These aren't skill
+    changes, so they don't count as changed."""
+    store = FirestoreJobStore.local(tmp_path / "db.json", verbose=False)
+    store.import_documents({
+        "insight-global-text": _doc("insight-global-text", salary_low=60, salary_high=64),
+        "insight-global-amount": _doc("insight-global-amount", salary_low=64, salary_high=0),
+        "insight-global-unclear": _doc("insight-global-unclear", salary_low=1200, salary_high=3000),
+        "insight-global-stated": _doc("insight-global-stated", salary_low=1200, salary_high=3000,
+                                      salary_period="month", salary_period_estimated=False),
+        "insight-global-unpaid": _doc("insight-global-unpaid", salary_low=0, salary_high=0),
+        # No description saved: the amount still tells.
+        "insight-global-no-text": _doc("insight-global-no-text", salary_low=150000, salary_high=0),
+    })
+    store.save_descriptions({
+        "insight-global-text": f"{PYTHON_TEXT}\nPay rate range: $60-64/hour",
+        "insight-global-amount": PYTHON_TEXT,
+        "insight-global-unclear": PYTHON_TEXT,
+        "insight-global-stated": f"{PYTHON_TEXT}\n$1,200 - $3,000 per hour",
+        "insight-global-unpaid": PYTHON_TEXT,
+    })
+    first = job_search.reassess_saved_jobs(store, fetch_missing=False)
+
+    jobs = dict(store.list_job_documents())
+    periods = {doc_id.removeprefix("insight-global-"): (data.get("salary_period"), data.get("salary_period_estimated"))
+               for doc_id, data in jobs.items()}
+    assert periods == {
+        "text": ("hour", False),
+        "amount": ("hour", True),
+        "unclear": ("year", True),
+        "stated": ("month", False),
+        "unpaid": ("", False),
+        "no-text": ("year", True),
+    }
+    # Status and notes stay as they were.
+    assert jobs["insight-global-text"]["status"] == "emailed"
+    # Only the skill re-scoring counts as changed; a second pass changes nothing.
+    second = job_search.reassess_saved_jobs(store, fetch_missing=False)
+    assert first.changed == 5  # matched skills filled in on the five with descriptions
+    assert second.changed == 0
+    assert dict(store.list_job_documents()) == jobs

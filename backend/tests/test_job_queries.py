@@ -10,6 +10,7 @@ from job_queries import (
     job_stats,
     normalize_job,
     remote_status,
+    salary_lowest_sort_value,
     salary_sort_value,
     sort_jobs,
 )
@@ -81,9 +82,18 @@ def test_normalize_job_tolerates_bad_values():
 def test_remote_status_and_salary_sort_value():
     assert [remote_status(job("a", is_remote=v)) for v in (True, False, None)] == ["remote", "not_remote", "unmarked"]
     assert salary_sort_value(job("a", salary_low=140000, salary_high=0)) == 140000
-    assert salary_sort_value(job("a", salary_low=0, salary_high=90)) == 90
+    # Per year: an hourly $90 is 90 x 2,080 (assumed hourly with no period, as it's shown).
+    assert salary_sort_value(job("a", salary_low=0, salary_high=90)) == 187200
+    assert salary_sort_value(job("a", salary_low=0, salary_high=90, salary_period="hour")) == 187200
+    assert salary_sort_value(job("a", salary_low=1200, salary_high=3000, salary_period="month")) == 36000
+    assert salary_sort_value(job("a", salary_low=2000, salary_high=0, salary_period="week")) == 104000
+    assert salary_sort_value(job("a", salary_low=500, salary_high=0, salary_period="day")) == 130000
     assert salary_sort_value(job("a", salary_low=0, salary_high=0)) is None
     assert salary_sort_value(job("a", salary_low=None, salary_high=None)) is None
+    # "Salary (lowest)" goes by the lower amount.
+    assert salary_lowest_sort_value(job("a", salary_low=1200, salary_high=3000, salary_period="month")) == 14400
+    assert salary_lowest_sort_value(job("a", salary_low=140000, salary_high=0)) == 140000
+    assert salary_lowest_sort_value(job("a", salary_low=0, salary_high=0)) is None
 
 
 # --- filtering ----------------------------------------------------------------------------
@@ -133,8 +143,11 @@ JOBS = [
         (JobFilters(skills=("python",)), ["python"]),
         (JobFilters(skills=("React", "TypeScript")), ["react"]),  # needs all of them
         (JobFilters(skills=("React", "Python")), []),
-        (JobFilters(min_salary=100), ["python"]),  # "Not listed" never passes
-        (JobFilters(min_salary=60), ["react", "python"]),
+        # Per year: react's $55-65/hr is up to $135,200.
+        (JobFilters(min_salary=140000), ["python"]),  # "Not listed" never passes
+        (JobFilters(min_salary=130000), ["react", "python"]),
+        (JobFilters(salary_listed=True), ["react", "python"]),
+        (JobFilters(salary_listed=False), ["java"]),
         (JobFilters(posted_since=date(2026, 10, 15)), ["react"]),  # undated excluded
         (JobFilters(seen_since=date(2026, 11, 1)), ["react", "java"]),
         (JobFilters(applied=True), ["python", "java"]),  # applied_at counts
@@ -199,6 +212,8 @@ SORTABLE = [
         ("last_seen", ["b", "d", "c", "a"]),
         ("posted", ["d", "a", "b", "c"]),  # ties stay newest-seen first; undated last
         ("salary", ["b", "a", "d", "c"]),  # "Not listed" (0/0 and null) last, newest first
+        # a's $55/hr is $114,400 a year, below b's $140,000; "Not listed" still last.
+        ("salary_lowest", ["a", "b", "d", "c"]),
         ("score", ["b", "d", "a", "c"]),
         ("fit", ["d", "a", "b", "c"]),  # best fit first; unscored (older jobs) last
         ("title", ["b", "d", "a", "c"]),  # case-insensitive, untitled last
@@ -207,6 +222,48 @@ SORTABLE = [
 )
 def test_sort_jobs(key, expected):
     assert ids(sort_jobs(SORTABLE, key)) == expected
+
+
+def test_sort_jobs_by_several_keys_orders_the_ties_of_the_ones_before():
+    jobs = [
+        job("two-low", score=2, salary_low=80000, salary_high=0, salary_period="year", last_seen_at=seen(1)),
+        job("three-low", score=3, salary_low=70000, salary_high=0, salary_period="year", last_seen_at=seen(2)),
+        job("two-high", score=2, salary_low=150000, salary_high=0, salary_period="year", last_seen_at=seen(3)),
+        job("three-high", score=3, salary_low=120000, salary_high=0, salary_period="year", last_seen_at=seen(4)),
+        job("two-none", score=2, salary_low=0, salary_high=0, last_seen_at=seen(5)),
+        job("two-high-older", score=2, salary_low=150000, salary_high=0, salary_period="year", last_seen_at=seen(2)),
+    ]
+
+    # Most skill matches, then highest salary; "Not listed" last among its
+    # ties; ties on both stay newest first.
+    assert ids(sort_jobs(jobs, ["score", "salary"])) == [
+        "three-high", "three-low", "two-high", "two-high-older", "two-low", "two-none",
+    ]
+    # The order of the keys matters.
+    assert ids(sort_jobs(jobs, ["salary", "score"])) == [
+        "two-high", "two-high-older", "three-high", "two-low", "three-low", "two-none",
+    ]
+    assert ids(sort_jobs(jobs, ["score", "salary_lowest"])) == [
+        "three-low", "three-high", "two-low", "two-high", "two-high-older", "two-none",
+    ]
+    # One key, as a string or a list, is the same sort.
+    assert ids(sort_jobs(jobs, ["score"])) == ids(sort_jobs(jobs, "score"))
+    with pytest.raises(ValueError, match="Unknown sort 'nope'"):
+        sort_jobs(jobs, ["score", "nope"])
+
+
+def test_salary_sorts_compare_pay_per_year_across_periods():
+    jobs = [
+        job("hourly", salary_low=91, salary_high=0, salary_period="hour"),  # $189,280 a year
+        job("monthly", salary_low=1200, salary_high=3000, salary_period="month"),  # $14,400 - $36,000
+        job("wide", salary_low=60000, salary_high=200000, salary_period="year"),
+        job("narrow", salary_low=80000, salary_high=90000, salary_period="year"),
+        job("none", salary_low=0, salary_high=0),
+    ]
+
+    # Highest by the top of each range; lowest by the bottom.
+    assert ids(sort_jobs(jobs, "salary")) == ["wide", "hourly", "narrow", "monthly", "none"]
+    assert ids(sort_jobs(jobs, "salary_lowest")) == ["monthly", "wide", "narrow", "hourly", "none"]
 
 
 def test_sort_jobs_rejects_unknown_keys_and_leaves_input_alone():

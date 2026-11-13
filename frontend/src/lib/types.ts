@@ -24,6 +24,15 @@ export function isJobStatus(value: unknown): value is JobStatus {
   return typeof value === "string" && (JOB_STATUSES as readonly string[]).includes(value);
 }
 
+// What a salary is per. Keep in sync with PERIODS in backend/salary.py.
+export const SALARY_PERIODS = ["hour", "day", "week", "month", "year"] as const;
+
+export type SalaryPeriod = (typeof SALARY_PERIODS)[number];
+
+export function isSalaryPeriod(value: unknown): value is SalaryPeriod {
+  return typeof value === "string" && (SALARY_PERIODS as readonly string[]).includes(value);
+}
+
 /** Human-friendly labels and a short explanation for each workflow status. */
 export const STATUS_INFO: Record<JobStatus, { label: string; hint: string }> = {
   unemailed: { label: "Unemailed", hint: "Matched and saved, but the digest email has not gone out yet." },
@@ -73,6 +82,14 @@ export interface Job {
   job_type: string | null;
   salary_low: number | null;
   salary_high: number | null;
+  /**
+   * What the salary is per, from the site, the posting's text, or (see
+   * `salary_period_estimated`) the amount; null when none of them tell.
+   * Set by backend/salary.py.
+   */
+  salary_period: SalaryPeriod | null;
+  /** True when `salary_period` is only estimated from the amount. */
+  salary_period_estimated: boolean;
   url: string | null;
   track: string | null;
   posted_date: string | null;

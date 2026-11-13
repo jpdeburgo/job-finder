@@ -581,7 +581,7 @@ def test_lever_postings_are_normalized():
             "createdAt": 1793000000000,
             "workplaceType": "remote",
             "categories": {"location": "Austin, TX", "commitment": "Contract"},
-            "salaryRange": {"min": 100000, "max": 140000},
+            "salaryRange": {"min": 100000, "max": 140000, "currency": "USD", "interval": "per-year-salary"},
             "descriptionPlain": "Build things.",
             "lists": [{"text": "Requirements", "content": "<li>React and Node.js</li>"}],
             "additionalPlain": "Benefits.",
@@ -596,6 +596,7 @@ def test_lever_postings_are_normalized():
     assert posting.is_remote is True
     assert posting.job_type == "Contract"
     assert (posting.salary_low, posting.salary_high) == (100000, 140000)
+    assert posting.salary_period == "year"
     assert posting.description == "Build things. Requirements React and Node.js Benefits."
     assert posting.posted_date.startswith("2026-10-26")
 

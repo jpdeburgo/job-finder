@@ -7,7 +7,8 @@ overview is in the [root README](../README.md). Run every command below from
 this `backend/` directory.
 
 Searches every careers page in `JOB_SEARCH_URLS` (in `job_boards.py`: Insight
-Global, Accenture, and 18 company Workday/Greenhouse boards; see
+Global, Accenture, 33 company Workday/Greenhouse/Ashby boards, and the remote
+job boards Himalayas, Remote OK, Jobicy, and We Work Remotely; see
 [Job sites](#job-sites)) for remote jobs matching configurable tracks:
 
 - **Core stack:** software engineering roles scored against your skills. A
@@ -54,14 +55,30 @@ INSIGHT_GLOBAL_URL = "https://insightglobal.com/jobs/search/all/all"
 ACCENTURE_SEARCH_URL = "https://www.accenture.com/us-en/careers/jobsearch"
 NVIDIA_URL = "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"   # Workday
 GITLAB_URL = "https://boards.greenhouse.io/gitlab"                              # Greenhouse
+SUPABASE_URL = "https://jobs.ashbyhq.com/supabase"                              # Ashby
+HIMALAYAS_URL = "https://himalayas.app/jobs/api/search"                         # remote job board
 ...
 JOB_SEARCH_URLS = [INSIGHT_GLOBAL_URL, ACCENTURE_SEARCH_URL, NVIDIA_URL, ..., GITLAB_URL, ...]
 ```
 
-Out of the box that's Insight Global, Accenture, six more Workday boards
-(NVIDIA, Salesforce, Adobe, PayPal, Mastercard, Walmart), and twelve
-Greenhouse boards (GitLab, Cloudflare, Datadog, Reddit, Duolingo, Databricks,
-Figma, Vercel, Robinhood, Coinbase, Discord, Greenhouse).
+Out of the box that's 43 URLs:
+
+- Insight Global and Accenture.
+- Six more Workday boards: NVIDIA, Salesforce, Adobe, PayPal, Mastercard, Walmart.
+- 21 Greenhouse boards: GitLab, Cloudflare, Datadog, Reddit, Duolingo,
+  Databricks, Figma, Vercel, Robinhood, Coinbase, Discord, Greenhouse, Airbnb,
+  Anthropic, DoorDash (`doordashusa`), Stripe, Automattic, Webflow, Pinterest,
+  Instacart, Brex.
+- Six Ashby boards: Supabase, PostHog, Zapier, Linear, Ashby, OpenAI.
+- Remote job boards, which list many companies' jobs: Himalayas (plus a
+  second, part-time-only Himalayas search), Remote OK, Jobicy (US
+  engineering), and four We Work Remotely feeds (programming, full stack,
+  back end, front end).
+
+Some of the newer company boards are guesses at the board name (marked
+`# guess` in `job_boards.py`). A board that can't be read is skipped with a
+single `couldn't be searched` line per run while the other sites still run.
+Delete it from `job_boards.py` if that keeps happening.
 `python job_search.py --list-sites` shows how each one is read. A test
 (`tests/test_job_boards.py`) fails if a `*_URL` constant in `job_boards.py`
 is missing from `JOB_SEARCH_URLS`, or if a URL stops resolving to a board.
@@ -78,7 +95,30 @@ filters, tracks, and skill scoring above treat every site the same way.
 | Any Workday board: `https://<company>.wdN.myworkdayjobs.com/<site>` | Workday's `/wday/cxs/...` search API | `<company>-<requisition>` | Narrowed to `JOB_COUNTRY` when the board has a country filter. |
 | Any Greenhouse board: `https://boards.greenhouse.io/<company>` | Greenhouse Job Board API | `<company>-<id>` | The whole board is downloaded once per run; search terms are matched against titles and descriptions locally. No country filter, so jobs whose location names another country or region ("Remote - Canada", "Remote, EMEA") are dropped (see `NON_US_LOCATION_WORDS`). |
 | Any Lever board: `https://jobs.lever.co/<company>` | Lever Postings API | `<company>-<id>` | Same as Greenhouse. |
-| Any other careers page | the page's HTML is checked for a Workday/Greenhouse/Lever board link | as above | If no link is found, the site is skipped with a warning. Add its board to `KNOWN_CAREER_SITES` in `job_sites.py`. |
+| Any Ashby board: `https://jobs.ashbyhq.com/<company>` | Ashby's public job posting API (`api.ashbyhq.com/posting-api/job-board/<company>?includeCompensation=true`) | `<company>-<id>` | Same as Greenhouse. Each job states whether it's remote (`workplaceType`), its employment type (full-time, part-time, contract, ...), and a salary when the company publishes one. |
+| Himalayas: `https://himalayas.app/jobs/api/search` | Himalayas search API | `himalayas-<company>-<slug>` | Searched per term on Himalayas' server, newest first. Filters in the URL (`employment_type=Part%20Time`) are kept; `country=US` is added when `JOB_COUNTRY` is the US. |
+| Remote OK: `https://remoteok.com/api` | Remote OK API | `remote-ok-<id>` | Its newest jobs, all at once, matched locally like Greenhouse. No job type. |
+| Jobicy: `https://jobicy.com/api/v2/remote-jobs?...` | Jobicy API | `jobicy-<id>` | Up to 100 jobs at once (the URL's `geo`, `industry`, `tag` filters are kept; `geo=usa` is added for the US), matched locally. Jobicy asks to be called only a few times a day. |
+| We Work Remotely: any `https://weworkremotely.com/...rss` feed | the RSS feed | `we-work-remotely-<slug>` | Matched locally. Every feed shares one ID space, so a job in several category feeds is saved once. Only the all-jobs feed says the job type. |
+| Any other careers page | the page's HTML is checked for a Workday/Greenhouse/Lever/Ashby board link | as above | If no link is found, the site is skipped with a warning. Add its board to `KNOWN_CAREER_SITES` in `job_sites.py`. |
+
+**Remote job boards** (Himalayas, Remote OK, Jobicy, We Work Remotely) list
+jobs from many companies, so each job is saved under the company that's
+hiring, not the board. Its link goes to the board's own listing, because each
+board asks for a visible link back. These jobs are all remote, but many are
+limited to certain countries. The board's location restriction ("Europe
+Only", "Canada", "USA") is saved as the job's location, so the same
+`NON_US_LOCATION_WORDS` check as Greenhouse drops jobs outside the US. None of
+these boards has an API for loading one job, so saved jobs from them are only
+re-checked when a search finds them again (`--check-remote` can't load them
+either; Lever is the same). The same job can show up on a company board and
+on a job board; each copy is saved separately.
+
+**Part-time jobs.** The search keeps every job type and saves it in
+`job_type`, which the dashboard shows and searches. Ashby boards, Jobicy, and
+Himalayas report it per job. `HIMALAYAS_PART_TIME_URL` adds a Himalayas search
+limited to part-time roles. Greenhouse and Workday give no reliable type, so
+those jobs show whatever the board says (often nothing).
 
 To add a company, add its careers page or ATS board URL to `job_boards.py`
 and to `JOB_SEARCH_URLS` there. Each run prints how many matches every site produced. A
@@ -98,8 +138,10 @@ Where the status comes from: Insight Global's `workRemote`; Workday's
 `remoteType` (only on the job's details page, so every Workday posting gets a
 details request; it overrides a "Remote" location in the search results) or a
 location saying "Remote"; Lever's `workplaceType`, with the location as a
-fallback; and for Greenhouse, the company's own "Workplace Type" field if it
-has one, else the location text.
+fallback; Ashby's `workplaceType`, then its `isRemote` flag; for Greenhouse,
+the company's own "Workplace Type" field if it has one, else the location
+text; and the remote job boards are remote-only, so their jobs start out
+remote.
 
 Those flags are often wrong, so two more things are checked. Any other
 work-arrangement field in a site's data (`workType`, `isHybrid`,
@@ -456,7 +498,8 @@ pipenv run uvicorn api:app --reload                   # let the dashboard's Run 
 ```
 
 `--site` takes a site name (`accenture`, `"insight global"`), a board kind
-(`insight-global`, `workday`, `greenhouse`, `lever`), or any careers page or
+(`insight-global`, `workday`, `greenhouse`, `lever`, `ashby`, `himalayas`,
+`remoteok`, `jobicy`, `weworkremotely`), or any careers page or
 board URL, including one that isn't in `JOB_SEARCH_URLS`. Repeat it to search
 several. It matches case-insensitively and ignores spaces and dashes. A value
 that matches nothing exits with the list of available sites. `--local`
@@ -476,7 +519,7 @@ instead of by fixed sleeps:
 | --- | --- | --- |
 | `MAX_CONCURRENT_REQUESTS_PER_SITE` | 4 | requests in flight per site |
 | `MIN_SECONDS_BETWEEN_REQUESTS` | 0.25 | minimum gap between request starts to the same host (so at most 4 per second) |
-| `MAX_PAGES_PER_SEARCH` | 10 | result pages per term (Workday pages hold 20 results, Insight Global's 50) |
+| `MAX_PAGES_PER_SEARCH` | 10 | result pages per term (Workday and Himalayas pages hold 20 results, Insight Global's 50) |
 
 A timing line is printed per site. Accenture dominates: Workday sorts by
 relevance, so every term reads all its pages, and most postings need a details
@@ -542,7 +585,7 @@ timestamps as ISO strings.
 
 | Endpoint | What it does |
 | --- | --- |
-| `GET /jobs` | Jobs matching the filters below, sorted, paged: `{"jobs": [...], "total", "limit", "offset"}`. `sort`: `last_seen` (default), `posted`, `salary`, `score`, `title`, `status`, the same orders as the dashboard's Sort menu ("Not listed" salaries last). `limit` 1-500 (default 100), `offset`. |
+| `GET /jobs` | Jobs matching the filters below, sorted, paged: `{"jobs": [...], "total", "limit", "offset"}`. `sort`: `last_seen` (default), `posted`, `salary` (highest first), `salary_lowest`, `score`, `fit`, `title`, `status`, the same orders as the dashboard's Sort menu (salaries compared per year, "Not listed" last). Give several, comma-separated or repeated, and each orders the ties of the ones before it, like the dashboard's **Then by**: `sort=score,salary` is most skill matches first, then the highest salary among jobs with the same number. Jobs that tie on every key stay newest first. `limit` 1-500 (default 100), `offset`. |
 | `GET /jobs/stats` | Counts by status (every status, zeros included), company, track, and remote status, plus `total` and `applied`. Takes the same filters. |
 | `POST /jobs/reassess` | Re-scores every saved job against your current skills (see [Reassessing saved jobs](#reassessing-saved-jobs)) and returns a summary: `total_jobs`, `reassessed`, `changed`, `no_longer_match`, `fetched` (descriptions loaded from the sites), `unavailable`, `skills_source`. `?fetch=false` skips loading missing descriptions. `409` while a search runs (a search can't start during one either). The dashboard's **Refresh** calls it. |
 | `GET /jobs/{job_id}` | One job: `{"job": ...}`, or `404`. |
@@ -559,7 +602,8 @@ values matches any of them):
 | `track` | Track name or its start: `core`, `java`, `ios`, `.net`. |
 | `remote` | `remote`, `unmarked` (the site didn't say), `not_remote`. |
 | `skill` | Matched skill. Repeat for several; the job needs **all** of them. |
-| `min_salary` | Highest listed amount at least this; excludes "Not listed". |
+| `min_salary` | Highest listed amount, per year, at least this (`$50/hr` counts as 104,000); excludes "Not listed". |
+| `salary_listed` | `true`: only jobs with a salary listed; `false`: only "Not listed" ones. |
 | `posted_since`, `seen_since` | `YYYY-MM-DD`: posted, or last seen by the search, on or after. |
 | `applied` | `true`: jobs you've applied to (status `applied`, or `applied_at` set). `false`: the rest. |
 
@@ -731,6 +775,40 @@ fields:
 | `work_arrangement`, `work_arrangement_set_at` | How you say the job is worked (`remote`, `hybrid`, `on_site`), overriding the site's `is_remote`; searches never change it. |
 | `not_remote_reason` | Why the search marked a job the site called remote as not remote. |
 | `matches_skills`, `skills_mismatch_reason` | Whether the job still matches your skills, and why not (see [Reassessing saved jobs](#reassessing-saved-jobs)). |
+| `salary_period`, `salary_period_estimated` | What `salary_low`/`salary_high` are per (`hour`, `day`, `week`, `month`, `year`; empty when there's no salary), and whether it's assumed because neither the site nor the posting says (see [Salaries](#salaries)). |
+
+### Salaries
+
+A salary reads with what it's per, in the email and the dashboard:
+`$60 - $65/hr`, `$1,200 - $3,000/mo`, `From $140,000/yr`. Sites only give two
+numbers, so `salary.py` works out the period in this order:
+
+1. **The site's own field**, when it has one: Lever's `interval`, Ashby's
+   `interval`, a unit on Insight Global's `payRate` (`type`, `rateType`,
+   `period`, ...), Jobicy's or Himalayas' `salaryPeriod`. Remote OK's salaries
+   are yearly (it asks posters for an annual range).
+2. **The posting's text**, when it gives a period next to the same amount:
+   "Pay rate range: $60-64/hour", "$120k - $150k per year", "Monthly salary:
+   $2,500". A different amount ("$75-85/hr" when the site says $86) doesn't
+   count.
+3. **Otherwise it's assumed**: an amount under $300 is an hourly rate
+   (Insight Global's unlabelled contract rates), and anything else is a
+   yearly salary, so `$1,200 - $3,000/yr (est.)`. Assumed periods are marked
+   `(est.)`; the dashboard's tooltip and details say why.
+
+Ashby boards can publish pay per hour, month, or year; a yearly range wins
+when there are several. Jobs saved before periods were kept read with the
+assumed period right away, and get their period from their description the
+next time saved jobs are reassessed (after every search, or the dashboard's
+**Refresh**).
+
+Sorting and filtering compare pay **per year** (`salary.PER_YEAR`: hourly ×
+2,080, daily × 260, weekly × 52, monthly × 12), using the same period the
+salary shows, so `$91/hr` ($189,280) ranks above `$80,000 - $90,000/yr`, and
+`$1,200 - $3,000/mo` below both. "Salary (highest)" goes by the top of each
+range, "Salary (lowest)" by the bottom, and "Not listed" is last in both. The
+dashboard's **Salary** filter (`salary_listed` in `GET /jobs`) shows only jobs
+with a salary listed, or only the "Not listed" ones.
 
 Matches are saved **before** the email goes out, as `unemailed`, then flipped
 to `emailed` once Gmail accepts the digest. If the send fails, nothing is lost:
@@ -792,6 +870,8 @@ with a fake session, so they don't call any AI either.
 `tests/test_resume.py` also checks that `../frontend/src/test/fixtures/resume.json`
 (what the dashboard's tests read) is what this side writes; after changing the
 resume document, regenerate it with `UPDATE_RESUME_FIXTURE=1 pipenv run pytest tests/test_resume.py`. `tests/test_job_queries.py` covers the filtering and sorting
-behind `GET /jobs`.
+behind `GET /jobs`. `tests/test_salary.py` and the dashboard's tests both check
+every case in `../frontend/src/test/fixtures/salary_formats.json`, so the email
+and the dashboard word salaries the same way.
 The suite includes a round-trip check that documents written by the dashboard
 (`../frontend`) read back correctly here.

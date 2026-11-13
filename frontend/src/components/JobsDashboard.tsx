@@ -55,7 +55,8 @@ export function JobsDashboard({
   const [jobs, setJobs] = useState<Job[]>(initialJobs);
   const [store, setStore] = useState<StoreInfo>(initialStore);
   const [filters, setFilters] = useState<JobFilters>(initialFilters);
-  const [sort, setSort] = useState<SortKey>("last_seen");
+  // The sort, then what orders its ties ("Then by"), if anything.
+  const [sort, setSort] = useState<SortKey[]>(["last_seen"]);
   const [page, setPage] = useState(initialPage);
   const [pageSize, setPageSize] = useState<PageSize>(initialPageSize);
   const tableRef = useRef<HTMLDivElement>(null);
@@ -95,7 +96,7 @@ export function JobsDashboard({
     setFilters(update);
     setPage(1);
   };
-  const updateSort = (next: SortKey) => {
+  const updateSort = (next: SortKey[]) => {
     setSort(next);
     setPage(1);
   };

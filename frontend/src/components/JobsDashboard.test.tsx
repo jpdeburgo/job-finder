@@ -229,6 +229,34 @@ describe("filtering and sorting", () => {
     expect(trigger).toHaveTextContent("All companies");
   });
 
+  it("finds a company by typing in the company filter", async () => {
+    const user = setupUser();
+    renderDashboard([
+      ...jobs,
+      makeJob({ id: "nvidia", company: "NVIDIA", title: "CUDA Engineer" }),
+      makeJob({ id: "doordash", company: "Doordashusa", title: "Backend Engineer" }),
+      makeJob({ id: "databricks", company: "Databricks", title: "Platform Engineer" }),
+    ]);
+    const trigger = screen.getByRole("button", { name: "Company" });
+
+    await user.click(trigger);
+    const search = screen.getByRole("searchbox", { name: "Search companies" });
+    await waitFor(() => expect(search).toHaveFocus());
+
+    await user.keyboard("door");
+    expect(screen.getAllByRole("menuitemcheckbox").map((option) => option.getAttribute("aria-label"))).toEqual([
+      "Doordashusa, 1 job",
+    ]);
+    await user.keyboard("{Enter}");
+    expect(rowIds()).toEqual(["job-row-doordash"]);
+    expect(trigger).toHaveTextContent("Doordashusa");
+
+    // Straight on to the next one (a later word in the name counts too).
+    await user.keyboard("glob{Enter}");
+    expect(trigger).toHaveTextContent("Doordashusa or Insight Global");
+    expect(rowIds()).toHaveLength(3);
+  });
+
   const remoteOptions = async (user: ReturnType<typeof setupUser>) => {
     await user.click(screen.getByRole("combobox", { name: "Remote" }));
     const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
@@ -338,19 +366,92 @@ describe("filtering and sorting", () => {
     expect(rowIds()).toEqual(["job-row-strong", "job-row-weak", "job-row-unscored"]);
   });
 
+  const salaryJobs = () => [
+    makeJob({ id: "unlisted", title: "Unlisted", salary_low: 0, salary_high: 0, salary_period: null, last_seen_at: "2026-11-06T13:00:00+00:00" }),
+    makeJob({ id: "from", title: "From only", salary_low: 140000, salary_high: 0, salary_period: "year", last_seen_at: "2026-11-01T13:00:00+00:00" }),
+    // $55 - $65/hr: $114,400 - $135,200 a year.
+    makeJob({ id: "range", title: "Range", salary_low: 55, salary_high: 65, salary_period: "hour", last_seen_at: "2026-11-02T13:00:00+00:00" }),
+    makeJob({ id: "monthly", title: "Monthly", salary_low: 1200, salary_high: 3000, salary_period: "month", last_seen_at: "2026-11-03T13:00:00+00:00" }),
+  ];
+
   it("sorts by salary with \"Not listed\" jobs at the bottom", async () => {
     const user = setupUser();
-    renderDashboard([
-      makeJob({ id: "unlisted", title: "Unlisted", salary_low: 0, salary_high: 0, last_seen_at: "2026-11-06T13:00:00+00:00" }),
-      makeJob({ id: "from", title: "From only", salary_low: 140000, salary_high: 0, last_seen_at: "2026-11-01T13:00:00+00:00" }),
-      makeJob({ id: "range", title: "Range", salary_low: 55, salary_high: 65, last_seen_at: "2026-11-02T13:00:00+00:00" }),
-    ]);
+    renderDashboard(salaryJobs());
     expect(rowIds()[0]).toBe("job-row-unlisted"); // newest first by default
 
     await choose(user, screen.getByRole("combobox", { name: "Sort" }), "Salary (highest)");
 
-    expect(rowIds()).toEqual(["job-row-from", "job-row-range", "job-row-unlisted"]);
+    expect(rowIds()).toEqual(["job-row-from", "job-row-range", "job-row-monthly", "job-row-unlisted"]);
     expect(row("unlisted").getByText("Not listed")).toBeInTheDocument();
+  });
+
+  it("sorts by lowest salary, per year, with \"Not listed\" jobs still at the bottom", async () => {
+    const user = setupUser();
+    renderDashboard(salaryJobs());
+
+    await choose(user, screen.getByRole("combobox", { name: "Sort" }), "Salary (lowest)");
+
+    expect(rowIds()).toEqual(["job-row-monthly", "job-row-range", "job-row-from", "job-row-unlisted"]);
+    expect(row("monthly").getByText("$1,200 - $3,000/mo")).toBeInTheDocument();
+  });
+
+  const tiedJobs = () => {
+    const job = (id: string, score: number, salary: number) =>
+      makeJob({ id, title: id, score, salary_low: salary, salary_high: 0, salary_period: salary ? "year" : null });
+    return [job("two-low", 2, 80000), job("three-low", 3, 70000), job("two-high", 2, 150000), job("three-high", 3, 120000)];
+  };
+
+  it("sorts by skill matches, then by salary among jobs with the same number", async () => {
+    const user = setupUser();
+    renderDashboard(tiedJobs());
+    const thenBy = screen.getByRole("combobox", { name: "Then by" });
+    expect(thenBy).toHaveTextContent("Nothing else");
+
+    await choose(user, screen.getByRole("combobox", { name: "Sort" }), "Skill matches (most)");
+    await choose(user, thenBy, "Salary (highest)");
+    expect(rowIds()).toEqual(["job-row-three-high", "job-row-three-low", "job-row-two-high", "job-row-two-low"]);
+
+    await choose(user, thenBy, "Salary (lowest)");
+    expect(rowIds()).toEqual(["job-row-three-low", "job-row-three-high", "job-row-two-low", "job-row-two-high"]);
+  });
+
+  it("keeps \"Then by\" when the first sort changes, unless it's now the same sort", async () => {
+    const user = setupUser();
+    renderDashboard(tiedJobs());
+    const sort = screen.getByRole("combobox", { name: "Sort" });
+    const thenBy = screen.getByRole("combobox", { name: "Then by" });
+    await choose(user, thenBy, "Salary (lowest)");
+
+    await choose(user, sort, "Best fit");
+    expect(thenBy).toHaveTextContent("Salary (lowest)");
+
+    // The same sort in the other direction makes no sense as a tie-breaker.
+    await choose(user, sort, "Salary (highest)");
+    expect(thenBy).toHaveTextContent("Nothing else");
+    await user.click(thenBy);
+    expect(screen.queryByRole("option", { name: "Salary (lowest)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Last seen (newest)" })).not.toBeInTheDocument(); // ties end newest first anyway
+  });
+
+  it("filters to jobs with a salary listed, or only the \"Not listed\" ones", async () => {
+    const user = setupUser();
+    renderDashboard(salaryJobs());
+    const trigger = screen.getByRole("combobox", { name: "Salary" });
+    expect(trigger).toHaveTextContent("Any");
+
+    await choose(user, trigger, "Listed");
+    expect(rowIds()).toEqual(["job-row-monthly", "job-row-range", "job-row-from"]);
+
+    await choose(user, trigger, "Not listed");
+    expect(rowIds()).toEqual(["job-row-unlisted"]);
+
+    // Together with the lowest-first sort: the lowest paid jobs, no "Not listed" in the way.
+    await choose(user, trigger, "Listed");
+    await choose(user, screen.getByRole("combobox", { name: "Sort" }), "Salary (lowest)");
+    expect(rowIds()).toEqual(["job-row-monthly", "job-row-range", "job-row-from"]);
+
+    await choose(user, trigger, "Any");
+    expect(rowIds()).toHaveLength(4);
   });
 });
 

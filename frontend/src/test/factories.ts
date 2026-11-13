@@ -14,6 +14,8 @@ export function makeJob(overrides: Partial<Job> = {}): Job {
     job_type: "Contract",
     salary_low: 55,
     salary_high: 65,
+    salary_period: "hour",
+    salary_period_estimated: false,
     url: `https://insightglobal.com/jobs/${id}`,
     track: "Core matches (your main stack)",
     posted_date: "2026-10-30",

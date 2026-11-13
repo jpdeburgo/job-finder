@@ -50,10 +50,20 @@ It has four pages, linked from the header:
 In the tracker you can:
 
 - See every tracked job with its company, fit score, track, matched skills,
-  salary, posted date, and when the script last saw it. Search, filter by
+  salary (with what it's per: `/hr`, `/mo`, `/yr`, marked `(est.)` when it's
+  assumed: hourly under $300, otherwise yearly; see
+  [Salaries](../backend/README.md#salaries)), posted date, and when the script last saw it. Search, filter by
   status/remote/track and by **company** and **skills**, and sort (**Best fit** puts the jobs that suit
   you best first; the details drawer explains each score, see
-  [Fit score](../backend/README.md#fit-score)). Results come 25 to a page
+  [Fit score](../backend/README.md#fit-score)). The **Salary** filter shows
+  only jobs with a salary listed (or only the "Not listed" ones), and
+  **Salary (highest)** / **Salary (lowest)** compare pay per year ($50/hr
+  counts as $104,000, $3,000/mo as $36,000), with "Not listed" always last.
+  **Then by** sorts the jobs that tie on the first sort: **Skill matches
+  (most)** then **Salary (highest)** puts the jobs with the most matches first
+  and, among those with the same number, the best paid first. Jobs that still
+  tie stay newest first. Changing the first sort keeps **Then by** unless
+  it's now the same sort. Results come 25 to a page
   (or 50 or 100: **Rows per page** under the table). A new filter, sort, or
   page size starts again at page 1, and the page is kept in the address
   (`/jobs?page=2&per_page=50`), so a reload or a bookmark opens the same page. Like Company and Track, the Remote
@@ -68,6 +78,14 @@ In the tracker you can:
   and choose whether a job needs **any** of them or **all** of them. Case
   doesn't matter, and the menu stays open while you pick; **Clear skills**
   empties it.
+- Both have a **search box** at the top, ready to type in as soon as the menu
+  opens. The list narrows as you type: names that start with what you typed
+  first ("a": Accenture, Adobe, Airbnb), then ones with a word that starts
+  with it ("global": Insight Global), then any other match, with the matching
+  part in bold. Case, spaces, and punctuation don't matter ("doordash" finds
+  Doordashusa). **Enter** picks the top match and clears the box for the next
+  one, **↓** moves into the list (**↑** from the top comes back), and **Esc**
+  clears the search (a second **Esc** closes the menu).
 - Mark a job **On-site**, **Hybrid**, or **Remote** when the site gets it
   wrong (the **Work arrangement** menu in the details drawer). Your choice
   overrides the site's everywhere, including the Remote filter, and searches

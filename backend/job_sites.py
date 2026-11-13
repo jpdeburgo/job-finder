@@ -17,6 +17,16 @@ tracking system (ATS) that many companies share. So a site resolves to one of:
   and many other large employers).
 * ``GreenhouseSite``: any ``boards.greenhouse.io/<company>`` board.
 * ``LeverSite``: any ``jobs.lever.co/<company>`` board.
+* ``AshbySite``: any ``jobs.ashbyhq.com/<company>`` board.
+
+Remote-only job boards list many companies' jobs, so each of their postings
+keeps its own company name, and links to the board's listing (they ask for a
+link back):
+
+* ``HimalayasSite``: himalayas.app's search API (searched per term).
+* ``RemoteOkSite``: remoteok.com's API (its newest jobs, all at once).
+* ``JobicySite``: jobicy.com's API (all at once).
+* ``WeWorkRemotelySite``: a weworkremotely.com RSS feed (all at once).
 
 A careers page on the company's own domain is matched to its ATS board
 through ``KNOWN_CAREER_SITES``. If the page isn't listed there, the resolver
@@ -28,14 +38,18 @@ from __future__ import annotations
 import dataclasses
 import html
 import re
+import xml.etree.ElementTree as ElementTree
 import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Iterable
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
+
+from salary import normalize_period, period_from_fields
 
 REQUEST_TIMEOUT_SECONDS = 20
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
@@ -83,6 +97,10 @@ class Posting:
     job_type: str = ""
     salary_low: float = 0.0
     salary_high: float = 0.0
+    # What the salary is per, when the site says: "hour", "day", "week",
+    # "month", or "year" (salary.PERIODS). "" when it doesn't; the search
+    # then reads it from the description or estimates it (salary.py).
+    salary_period: str = ""
     # Anything ``job_search._parse_posted_date`` understands: an ISO date or
     # timestamp. Empty when the site doesn't say.
     posted_date: str = ""
@@ -575,12 +593,16 @@ class JobSite:
     # give ("unmarked"; saved with is_remote None). Jobs marked hybrid or
     # on-site are dropped either way.
     include_unmarked_remote = False
+    # Names the job IDs instead of ``name`` when set. Several sites reading
+    # one job board (say, two We Work Remotely feeds) share it, so a job
+    # listed in both is saved once.
+    id_source: str = ""
 
     @property
     def id_prefix(self) -> str:
         """Prefix for job IDs ("accenture-", "insight-global-"), so two sites
         can't produce the same ID."""
-        return f"{_slug(self.name)}-"
+        return f"{_slug(self.id_source or self.name)}-"
 
     def fetch_page(self, session: requests.Session, term: str, page: int) -> SearchPage:
         raise NotImplementedError
@@ -599,6 +621,12 @@ class JobSite:
         and the raw JSON behind it, for ``--check-remote`` and re-checks.
         """
         raise UnsupportedSiteError(f"Can't look up single {self.kind or self.name} jobs yet.")
+
+    @property
+    def supports_lookup(self) -> bool:
+        """Whether ``lookup`` can load one job (re-checking saved jobs skips
+        sites where it can't)."""
+        return type(self).lookup is not JobSite.lookup
 
     def fetch_description(
         self, session: requests.Session, url: str, native_id: str = "", title: str = ""
@@ -827,6 +855,7 @@ class InsightGlobalSite(JobSite):
             job_type=_format_job_type(record.get("jobType")),
             salary_low=float(pay.get("min") or 0),
             salary_high=float(pay.get("max") or 0),
+            salary_period=period_from_fields(pay),
             posted_date=str(record.get("postedDate") or ""),
             detail_key=requisition_id,
         )
@@ -1240,20 +1269,33 @@ class WholeBoardSite(JobSite):
         self.remote_only = remote_only
         self.contract_only = contract_only
         self._postings: list[Posting] | None = None
+        # A download that failed (say, a board name that doesn't exist) fails
+        # every term without asking again.
+        self._fetch_error: requests.RequestException | None = None
         self._postings_lock = threading.Lock()  # terms are searched in parallel
 
     def fetch_all(self, session: requests.Session) -> list[Posting]:
         raise NotImplementedError
 
+    def all_postings(self, session: requests.Session) -> list[Posting]:
+        """Every posting on the board, downloaded once per run."""
+        with self._postings_lock:
+            if self._fetch_error is not None:
+                raise self._fetch_error
+            if self._postings is None:
+                try:
+                    self._postings = self.fetch_all(session)
+                except requests.RequestException as error:
+                    self._fetch_error = error
+                    raise
+            return self._postings
+
     def fetch_page(self, session: requests.Session, term: str, page: int) -> SearchPage:
         if page > 1:
             return SearchPage([], has_more=False)
-        with self._postings_lock:
-            if self._postings is None:
-                self._postings = self.fetch_all(session)
         matching = [
             posting
-            for posting in self._postings
+            for posting in self.all_postings(session)
             if contains_phrase(f"{posting.title} {posting.description or ''}", term)
         ]
         return SearchPage(matching, has_more=False)
@@ -1398,11 +1440,508 @@ class LeverSite(WholeBoardSite):
                     job_type=str(categories.get("commitment") or ""),
                     salary_low=float(salary.get("min") or 0),
                     salary_high=float(salary.get("max") or 0),
+                    # "per-year-salary", "per-hour-wage", "per-month-salary", ...
+                    salary_period=normalize_period(salary.get("interval")),
                     posted_date=posted,
                     description=re.sub(r"\s+", " ", " ".join(sections)).strip(),
                 )
             )
         return postings
+
+
+# --- Shared helpers for the boards below --------------------------------------------
+
+
+def _first(mapping: dict[str, Any], *keys: str) -> Any:
+    """The first of ``keys`` that ``mapping`` has a value for (APIs rename fields)."""
+    for key in keys:
+        value = mapping.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _native_id(value: Any) -> str:
+    """A job's own ID or URL slug, safe inside a job ID (and a Firestore
+    document ID, which can't contain "/")."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "")).strip("-.")
+
+
+def _url_slug(url: Any) -> str:
+    """The last part of a URL's path: ".../remote-jobs/acme-engineer" -> "acme-engineer"."""
+    return _native_id(urlparse(str(url or "")).path.rstrip("/").rsplit("/", 1)[-1])
+
+
+def timestamp_to_iso(value: Any) -> str:
+    """An API's posting date as an ISO timestamp: Unix seconds or
+    milliseconds, an RFC 822 date (RSS), or ISO text (kept as-is)."""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if isinstance(value, (int, float)):
+        seconds = value / 1000 if value > 10**11 else value  # milliseconds past ~1973
+        try:
+            return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return ""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        datetime.fromisoformat(text[:19])
+        return text.replace(" ", "T", 1) if re.match(r"\d{4}-\d\d-\d\d \d", text) else text
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(text)  # "Tue, 10 Nov 2026 14:02:11 +0000"
+    except (TypeError, ValueError, IndexError):
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _amount(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def usd_salary(low: Any, high: Any, currency: Any = "USD") -> tuple[float, float]:
+    """A salary range, or (0, 0) when it isn't in US dollars: the email and
+    dashboard show every salary in $."""
+    if str(currency or "USD").strip().upper() not in ("USD", "US$", "$"):
+        return 0.0, 0.0
+    return _amount(low), _amount(high)
+
+
+def format_employment_type(value: Any) -> str:
+    """"FullTime", "full-time", "Part Time", ["part-time"] -> "Full-time", "Part-time"."""
+    values = value if isinstance(value, list) else [value]
+    labels = []
+    for item in values:
+        text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(item or "")).strip()  # "PartTime"
+        text = re.sub(r"[\s_-]+", " ", text).lower()
+        if not text:
+            continue
+        text = {"full time": "Full-time", "part time": "Part-time", "intern": "Internship",
+                "contractor": "Contract"}.get(text, text.capitalize())
+        if text not in labels:
+            labels.append(text)
+    return ", ".join(labels)
+
+
+def _location_text(*parts: Any) -> str:
+    """Location parts (strings, or lists of strings or {"name": ...}) joined
+    into one line, each once: "United States; Canada"."""
+    seen: list[str] = []
+    for part in parts:
+        for item in part if isinstance(part, list) else [part]:
+            if isinstance(item, dict):
+                item = _first(item, "name", "location", "country")
+            text = re.sub(r"\s+", " ", str(item or "")).strip()
+            if text and text.lower() not in (s.lower() for s in seen):
+                seen.append(text)
+    return "; ".join(seen)
+
+
+# --- Ashby --------------------------------------------------------------------------
+
+# Ashby's workplaceType; anything else falls back to its isRemote flag.
+ASHBY_WORKPLACE_TYPES = {"remote": True, "hybrid": False, "onsite": False}
+
+
+class AshbySite(WholeBoardSite):
+    """``jobs.ashbyhq.com/<board>`` via Ashby's public job posting API.
+
+    One request returns the whole board, descriptions and (with
+    ``includeCompensation``) salaries included. Each job says whether it's
+    remote (``workplaceType``, ``isRemote``) and full- or part-time
+    (``employmentType``), so neither is guessed from text.
+    """
+
+    kind = "ashby"
+    API_BASE = "https://api.ashbyhq.com/posting-api/job-board/"
+
+    def __init__(self, name: str, search_url: str, board: str, **options: Any):
+        super().__init__(name, search_url, **options)
+        self.board = board
+        self.board_url = f"https://jobs.ashbyhq.com/{board}"
+        self.api_url = f"{self.API_BASE}{board}"
+
+    def _jobs(self, session: requests.Session) -> list[dict[str, Any]]:
+        payload = self._get_json(session, self.api_url, includeCompensation="true")
+        jobs = payload.get("jobs") if isinstance(payload, dict) else None
+        return [
+            job for job in jobs or []
+            if isinstance(job, dict) and job.get("isListed", True) is not False
+        ]
+
+    def fetch_all(self, session: requests.Session) -> list[Posting]:
+        return [self._posting(job) for job in self._jobs(session)]
+
+    def lookup(
+        self, session: requests.Session, url: str, native_id: str = "", title: str = ""
+    ) -> tuple[Posting, dict[str, Any]]:
+        # jobs.ashbyhq.com/<board>/<job id>[/application]; the API has no
+        # single-job call, so the board is read and the job found in it.
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        wanted = native_id or (segments[1] if len(segments) > 1 else "")
+        if not wanted:
+            raise UnsupportedSiteError(f"Couldn't find an Ashby job ID in {url}")
+        for job in self._jobs(session):
+            if self._job_id(job) == wanted:
+                return self._posting(job), job
+        raise UnsupportedSiteError(f"{url} is no longer listed on {self.board_url}")
+
+    @staticmethod
+    def _job_id(job: dict[str, Any]) -> str:
+        return _native_id(job.get("id")) or _url_slug(job.get("jobUrl"))
+
+    def _posting(self, job: dict[str, Any]) -> Posting:
+        address = (job.get("address") or {}).get("postalAddress") or {}
+        location = str(job.get("location") or "").strip()
+        secondary = [
+            str(item.get("location") or "") for item in job.get("secondaryLocations") or []
+            if isinstance(item, dict)
+        ]
+        if secondary:
+            city, state = _location_text(location, secondary), ""
+        else:
+            city, state = split_location(location)
+        # A country the location doesn't name ("Remote" in Canada) still
+        # counts for the US-only filter.
+        country = str(address.get("addressCountry") or "").strip()
+        if country and country.lower() not in f"{city} {state}".lower():
+            state = f"{state}, {country}" if state else country
+
+        workplace = str(job.get("workplaceType") or "")
+        remote = ASHBY_WORKPLACE_TYPES.get(workplace.lower().replace("-", "").replace(" ", ""))
+        if remote is None and isinstance(job.get("isRemote"), bool):
+            remote = job["isRemote"]
+        if remote is None:
+            remote = remote_from_text(location)
+
+        low, high, period = self._salary(job.get("compensation"))
+        description = (
+            html_to_text(job.get("descriptionHtml"), keep_lines=True)
+            or str(job.get("descriptionPlain") or "").strip()
+        )
+        return Posting(
+            job_id=f"{self.id_prefix}{self._job_id(job)}",
+            title=str(job.get("title") or "").strip() or "Unknown title",
+            url=str(job.get("jobUrl") or self.board_url),
+            company=self.name,
+            city=city,
+            state=state,
+            is_remote=remote,
+            remote_note=f'workplaceType = "{workplace}"' if remote is False and workplace else "",
+            job_type=format_employment_type(job.get("employmentType")),
+            salary_low=low,
+            salary_high=high,
+            salary_period=period,
+            posted_date=str(job.get("publishedAt") or ""),
+            description=description,
+        )
+
+    @staticmethod
+    def _salary(compensation: Any) -> tuple[float, float, str]:
+        """``(low, high, period)``: the US-dollar pay range the company
+        publishes, per "1 YEAR", "1 MONTH", "1 HOUR", ... A yearly range wins
+        when there are several."""
+        components = (compensation or {}).get("summaryComponents") if isinstance(compensation, dict) else None
+        found: list[tuple[float, float, str]] = []
+        for item in components or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("compensationType") or "").lower() != "salary":
+                continue
+            period = normalize_period(item.get("interval") or "1 YEAR")
+            if not period:
+                continue  # "2 WEEK", "NONE": not a period that can be shown
+            low, high = usd_salary(item.get("minValue"), item.get("maxValue"), item.get("currencyCode"))
+            if low or high:
+                found.append((low, high, period))
+        return next((pay for pay in found if pay[2] == "year"), found[0] if found else (0.0, 0.0, ""))
+
+
+# --- Remote-only job boards ---------------------------------------------------------
+#
+# These list jobs from many companies, all remote. Each posting keeps the
+# hiring company's name and links to the board's own listing (every one of
+# them asks for a visible link back). A job limited to other countries names
+# them in its location, so the US-only filter (job_search.JOB_COUNTRY) drops it.
+
+
+def _country_is_us(country: str | None) -> bool:
+    return str(country or "").strip().lower() in (
+        "united states of america", "united states", "usa", "us"
+    )
+
+
+def _query_params(url: str) -> dict[str, str]:
+    """A URL's query string as a dict (first value of each)."""
+    return {key: values[0] for key, values in parse_qs(urlparse(url).query).items() if values}
+
+
+class HimalayasSite(JobSite):
+    """himalayas.app, through its public search API (no key).
+
+    Unlike the whole-board sites, Himalayas is searched per term on its
+    server (``q``), newest first, 20 jobs a page. Filters in the configured
+    URL's query (``employment_type=Part Time``, ``country=US``, ...) are
+    kept; with a US ``JOB_COUNTRY`` and no ``country`` given, ``country=US``
+    is added. Docs: https://himalayas.app/docs/remote-jobs-api
+    """
+
+    kind = "himalayas"
+    id_source = "Himalayas"
+    newest_first = True  # sort=recent
+    PAGE_SIZE = 20
+    API_URL = "https://himalayas.app/jobs/api/search"
+
+    def __init__(self, search_url: str, *, remote_only: bool = True,
+                 contract_only: bool = False, country: str | None = None):
+        self.search_url = search_url
+        self.api_url = self.API_URL
+        self.remote_only = remote_only
+        self.contract_only = contract_only
+        self.params = _query_params(search_url)
+        self.params.pop("q", None)
+        self.params.pop("page", None)
+        self.params.setdefault("sort", "recent")
+        if _country_is_us(country):
+            self.params.setdefault("country", "US")
+        employment = self.params.get("employment_type")
+        self.name = f"Himalayas ({employment})" if employment else "Himalayas"
+
+    def fetch_page(self, session: requests.Session, term: str, page: int) -> SearchPage:
+        response = session.get(
+            self.api_url,
+            params={**self.params, "q": term, "page": page},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        jobs = [job for job in (payload.get("jobs") or []) if isinstance(job, dict)]
+        postings = [posting for posting in map(self._posting, jobs) if posting is not None]
+        total = payload.get("totalCount")
+        if isinstance(total, int) and not isinstance(total, bool):
+            offset = payload.get("offset")
+            start = offset if isinstance(offset, int) else (page - 1) * self.PAGE_SIZE
+            has_more = bool(jobs) and start + len(jobs) < total
+        else:
+            has_more = len(jobs) >= self.PAGE_SIZE
+        return SearchPage(postings, has_more=has_more)
+
+    def _posting(self, job: dict[str, Any]) -> Posting | None:
+        # The listing on himalayas.app: the guid, or the application link
+        # when that's where it points.
+        links = [str(job.get(key) or "") for key in ("guid", "applicationLink")]
+        url = next((link for link in links if "himalayas.app" in link), "") or next(
+            (link for link in links if link.startswith("http")), ""
+        )
+        native = _native_id(
+            "-".join(s for s in urlparse(url).path.split("/") if s not in ("", "companies", "jobs"))
+        ) or _native_id(job.get("id") or job.get("guid"))
+        if not native:
+            return None
+        restrictions = _location_text(job.get("locationRestrictions"))
+        low, high = usd_salary(
+            job.get("minSalary"), job.get("maxSalary"), _first(job, "currency", "salaryCurrency")
+        )
+        return Posting(
+            job_id=f"{self.id_prefix}{native}",
+            title=str(job.get("title") or "").strip() or "Unknown title",
+            url=url or "https://himalayas.app/jobs",
+            company=str(job.get("companyName") or "").strip(),
+            city=restrictions,
+            is_remote=True,
+            job_type=format_employment_type(job.get("employmentType")),
+            salary_low=low,
+            salary_high=high,
+            salary_period=period_from_fields(job, ("salaryPeriod", "salaryInterval", "salaryFrequency")),
+            posted_date=timestamp_to_iso(job.get("pubDate")),
+            description=html_to_text(
+                _first(job, "description", "excerpt"), keep_lines=True
+            ),
+        )
+
+
+class RemoteOkSite(WholeBoardSite):
+    """remoteok.com's public API (no key): its newest jobs in one JSON list.
+
+    The list's first item is a legal notice, not a job, and is skipped.
+    """
+
+    kind = "remoteok"
+    id_source = "Remote OK"
+    API_URL = "https://remoteok.com/api"
+
+    def __init__(self, search_url: str, **options: Any):
+        options.pop("country", None)
+        super().__init__("Remote OK", search_url, **options)
+        self.api_url = self.API_URL
+
+    def fetch_all(self, session: requests.Session) -> list[Posting]:
+        payload = self._get_json(session, self.api_url)
+        postings = []
+        for job in payload if isinstance(payload, list) else []:
+            if not isinstance(job, dict) or not job.get("id") or not job.get("position"):
+                continue  # the legal notice
+            tags = [str(tag) for tag in job.get("tags") or [] if tag]
+            description = html_to_text(job.get("description"), keep_lines=True)
+            if tags:
+                description = f"{description}\nTags: {', '.join(tags)}".strip()
+            city, state = split_location(str(job.get("location") or ""))
+            low, high = usd_salary(job.get("salary_min"), job.get("salary_max"))
+            postings.append(
+                Posting(
+                    job_id=f"{self.id_prefix}{_native_id(job['id'])}",
+                    title=str(job["position"]).strip(),
+                    url=str(job.get("url") or f"https://remoteok.com/remote-jobs/{job['id']}"),
+                    company=str(job.get("company") or "").strip(),
+                    city=city,
+                    state=state,
+                    is_remote=True,
+                    salary_low=low,
+                    salary_high=high,
+                    # Remote OK asks posters for an annual salary range.
+                    salary_period="year" if low or high else "",
+                    posted_date=timestamp_to_iso(job.get("date") or job.get("epoch")),
+                    description=description,
+                )
+            )
+        return postings
+
+
+class JobicySite(WholeBoardSite):
+    """jobicy.com's public API (no key): up to 100 jobs per call.
+
+    The configured URL's filters are kept (``geo=usa``, ``industry=...``,
+    ``tag=...``); with a US ``JOB_COUNTRY`` and no ``geo``, ``geo=usa`` is
+    added. Jobicy asks clients to call it only a few times a day, and the
+    board is downloaded once per run. Docs: https://jobicy.com/jobs-rss-feed
+    """
+
+    kind = "jobicy"
+    id_source = "Jobicy"
+    API_URL = "https://jobicy.com/api/v2/remote-jobs"
+
+    def __init__(self, search_url: str, *, country: str | None = None, **options: Any):
+        super().__init__("Jobicy", search_url, **options)
+        self.api_url = self.API_URL
+        self.params = _query_params(search_url) if "/api/" in urlparse(search_url).path else {}
+        self.params.setdefault("count", "100")
+        if _country_is_us(country):
+            self.params.setdefault("geo", "usa")
+
+    def fetch_all(self, session: requests.Session) -> list[Posting]:
+        payload = self._get_json(session, self.api_url, **self.params)
+        postings = []
+        for job in (payload.get("jobs") if isinstance(payload, dict) else None) or []:
+            if not isinstance(job, dict) or not job.get("id"):
+                continue
+            city, state = split_location(_location_text(job.get("jobGeo")))
+            low, high = usd_salary(
+                _first(job, "salaryMin", "annualSalaryMin"),
+                _first(job, "salaryMax", "annualSalaryMax"),
+                job.get("salaryCurrency"),
+            )
+            postings.append(
+                Posting(
+                    job_id=f"{self.id_prefix}{_native_id(job['id'])}",
+                    title=html.unescape(str(job.get("jobTitle") or "")).strip() or "Unknown title",
+                    url=str(job.get("url") or "https://jobicy.com/jobs"),
+                    company=html.unescape(str(job.get("companyName") or "")).strip(),
+                    city=city,
+                    state=state,
+                    is_remote=True,
+                    job_type=format_employment_type(job.get("jobType")),
+                    salary_low=low,
+                    salary_high=high,
+                    # Only a stated period: amounts in the "annualSalary"
+                    # fields aren't always yearly.
+                    salary_period=period_from_fields(job, ("salaryPeriod", "salaryInterval")),
+                    posted_date=timestamp_to_iso(job.get("pubDate")),
+                    description=html_to_text(
+                        _first(job, "jobDescription", "jobExcerpt"), keep_lines=True
+                    ),
+                )
+            )
+        return postings
+
+
+class WeWorkRemotelySite(WholeBoardSite):
+    """A weworkremotely.com RSS feed (no key): every job in it at once.
+
+    Item titles are "Company: Job title". Only the all-jobs feed says the
+    employment type. Every feed shares the "we-work-remotely-" job IDs, so a
+    job in several category feeds is saved once.
+    Docs: https://weworkremotely.com/remote-job-rss-feed
+    """
+
+    kind = "weworkremotely"
+    id_source = "We Work Remotely"
+    ALL_JOBS_FEED = "https://weworkremotely.com/remote-jobs.rss"
+
+    def __init__(self, search_url: str, **options: Any):
+        options.pop("country", None)
+        self.feed_url = self._feed_url(search_url)
+        category = re.search(r"/categories/(?:remote-)?([\w-]+?)(?:-jobs)?\.rss$", self.feed_url)
+        name = f"We Work Remotely ({_company_name(category.group(1))})" if category else "We Work Remotely"
+        super().__init__(name, search_url, **options)
+        self.api_url = self.feed_url
+
+    @classmethod
+    def _feed_url(cls, url: str) -> str:
+        """The RSS feed behind a WWR URL: a feed as-is, a category page's
+        feed, or the all-jobs feed."""
+        path = urlparse(url).path.rstrip("/")
+        if path.endswith(".rss"):
+            return f"https://weworkremotely.com{path}"
+        if path.startswith("/categories/"):
+            return f"https://weworkremotely.com{path}.rss"
+        return cls.ALL_JOBS_FEED
+
+    def fetch_all(self, session: requests.Session) -> list[Posting]:
+        response = session.get(self.feed_url, timeout=REQUEST_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        try:
+            root = ElementTree.fromstring(response.content)
+        except ElementTree.ParseError as error:
+            # A broken feed fails like a failed request: the site is skipped.
+            raise requests.RequestException(f"{self.feed_url} isn't a readable RSS feed: {error}")
+        return [posting for posting in map(self._posting, root.iter("item")) if posting]
+
+    def _posting(self, item: ElementTree.Element) -> Posting | None:
+        def text(tag: str) -> str:
+            return (item.findtext(tag) or "").strip()
+
+        url = text("link") or text("guid")
+        native = _url_slug(url)
+        if not native:
+            return None
+        company, separator, title = text("title").partition(": ")
+        if not separator:
+            company, title = "", company
+        skills = text("skills")
+        description = html_to_text(text("description"), keep_lines=True)
+        if skills:
+            description = f"{description}\nSkills: {skills}".strip()
+        return Posting(
+            job_id=f"{self.id_prefix}{native}",
+            title=html.unescape(title).strip() or "Unknown title",
+            url=url,
+            company=html.unescape(company).strip(),
+            city=_location_text(text("region"), text("country")),
+            is_remote=True,
+            job_type=format_employment_type(text("type")),
+            posted_date=timestamp_to_iso(text("pubDate")),
+            description=description,
+        )
 
 
 # --- Resolving a careers URL to a site ------------------------------------------
@@ -1414,6 +1953,7 @@ GREENHOUSE_HOSTS = (
     "job-boards.eu.greenhouse.io",
 )
 LEVER_HOSTS = {"jobs.lever.co": False, "jobs.eu.lever.co": True}  # host -> EU API
+ASHBY_HOSTS = ("jobs.ashbyhq.com", "api.ashbyhq.com")
 # ATS board links to look for in a careers page's HTML.
 BOARD_LINK_PATTERNS = (
     WORKDAY_URL_PATTERN,
@@ -1422,9 +1962,10 @@ BOARD_LINK_PATTERNS = (
         r"[A-Za-z0-9_-]+"
     ),
     re.compile(r"https?://jobs(?:\.eu)?\.lever\.co/[A-Za-z0-9_.-]+"),
+    re.compile(r"https?://jobs\.ashbyhq\.com/[A-Za-z0-9_.%-]+"),
 )
 # Path segments that are part of an ATS's own URL scheme, not a board name.
-NON_BOARD_SEGMENTS = {"embed", "v1", "boards", "job_board", "js"}
+NON_BOARD_SEGMENTS = {"embed", "v1", "boards", "job_board", "js", "posting-api", "job-board"}
 
 
 def _board_site(name: str | None, search_url: str, board_url: str,
@@ -1453,6 +1994,23 @@ def _board_site(name: str | None, search_url: str, board_url: str,
             name or _company_name(segments[0]), search_url, segments[0],
             eu=LEVER_HOSTS[host], **ats_options,
         )
+
+    if host in ASHBY_HOSTS:
+        # jobs.ashbyhq.com/<board>, or api.ashbyhq.com/posting-api/job-board/<board>
+        board = next((s for s in segments if s not in NON_BOARD_SEGMENTS), None)
+        if board:
+            return AshbySite(name or _company_name(board), search_url, board, **ats_options)
+
+    # Remote-only job boards, which list many companies' jobs.
+    site_host = host.removeprefix("www.")
+    if site_host == "himalayas.app":
+        return HimalayasSite(search_url, **options)
+    if site_host in ("remoteok.com", "remoteok.io"):
+        return RemoteOkSite(search_url, **options)
+    if site_host == "jobicy.com":
+        return JobicySite(search_url, **options)
+    if site_host == "weworkremotely.com":
+        return WeWorkRemotelySite(search_url, **options)
     return None
 
 
@@ -1476,10 +2034,12 @@ def resolve_job_site(
 
     1. Insight Global's search page uses its own API.
     2. Pages listed in ``KNOWN_CAREER_SITES`` use the ATS board they map to.
-    3. ATS board URLs (Workday, Greenhouse, Lever) are used directly.
+    3. ATS board URLs (Workday, Greenhouse, Lever, Ashby) and remote job
+       boards (Himalayas, Remote OK, Jobicy, We Work Remotely) are used directly.
     4. Otherwise the page is downloaded and checked for an ATS board link.
 
-    ``country`` narrows boards that support a country filter (Workday).
+    ``country`` narrows boards that support a country filter (Workday,
+    Himalayas, Jobicy).
     Raises ``UnsupportedSiteError`` if nothing works.
     """
     host = (urlparse(url).hostname or "").lower()
@@ -1516,6 +2076,6 @@ def resolve_job_site(
             return site
     raise UnsupportedSiteError(
         f"Couldn't find job listings behind {url}. The page doesn't link to a "
-        "Workday, Greenhouse, or Lever board; if you know which board it uses, add "
+        "Workday, Greenhouse, Lever, or Ashby board; if you know which board it uses, add "
         "it to KNOWN_CAREER_SITES in job_sites.py."
     )

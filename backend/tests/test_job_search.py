@@ -511,10 +511,30 @@ def test_search_term_builds_matches_from_api_records(no_delay):
     assert match.matched_skills == ["Python", "React", "AWS"]
     assert match.min_years == 4
     assert (match.salary_low, match.salary_high) == (70.0, 90.0)
+    assert (match.salary_period, match.salary_period_estimated) == ("hour", False)
+    assert job_search.format_salary(match) == "$70 - $90/hr"
     assert match.job_type == "Contract"
     assert match.posted_date == "2099-01-01"
     assert match.track == CORE_TRACK.name
     assert session.calls[0][0] == "https://insightglobal.com/all/jobs"
+
+
+def test_insight_global_pay_without_a_unit_reads_the_posting_or_the_amount(no_delay):
+    session = FakeSession(
+        [_page([
+            _api_job("stated", payRate={"min": 64.0, "max": 0}),
+            _api_job("unstated", payRate={"min": 64.0, "max": 0}),
+        ])],
+        {
+            "stated": "<p>Python and React on AWS.</p><p>Pay rate range: 60-64/hour</p>",
+            "unstated": "<p>Python and React on AWS.</p>",
+        },
+    )
+
+    matches = {m.job_id: m for m in job_search.search_term(session, IG, "Python Developer", CORE_TRACK)}
+
+    assert job_search.format_salary(matches["insight-global-stated"]) == "From $64/hr"
+    assert job_search.format_salary(matches["insight-global-unstated"]) == "From $64/hr (est.)"
 
 
 def test_search_term_skips_jobs_failing_list_level_filters_without_fetching_details(
@@ -662,6 +682,28 @@ def test_run_all_searches_skips_a_failing_term_but_keeps_the_rest(monkeypatch, c
     assert "Insight Global: search 'Software Engineer' FAILED" in out
     assert "Accenture: search 'Software Engineer' FAILED" in out
     assert "2 search(es) failed" in out
+
+
+def test_a_site_whose_every_search_fails_is_named_once(monkeypatch, capsys):
+    # A board that can't be read at all (a wrong board name, a site that's
+    # down) is one line in the warning, not one per search term.
+    fake = _fake_list_postings()
+
+    def accenture_down(session, site, term):
+        if site.name == "Accenture":
+            raise job_search.requests.ConnectionError("dropped")
+        return fake(session, site, term)
+
+    monkeypatch.setattr(job_search, "list_postings", accenture_down)
+
+    jobs = job_search.run_all_searches()
+
+    assert [j.job_id for j in jobs] == ["insight-global-kept"]
+    out = capsys.readouterr().out
+    terms = sum(len(track.terms) for track in job_search.TRACKS)
+    assert f"WARNING: {terms} search(es) failed: ['Accenture (every search)']" in out
+    assert "Accenture: couldn't be searched, skipping it: ConnectionError: dropped" in out
+    assert "Accenture: search" not in out
 
 
 def test_run_all_searches_raises_when_every_term_fails(monkeypatch):

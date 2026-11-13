@@ -5,7 +5,7 @@ import { memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { formatDate, formatLocation, formatSalary, hasApplied, trackLabel } from "@/lib/jobs";
+import { formatDate, formatLocation, formatSalary, hasApplied, salaryPeriodNote, trackLabel } from "@/lib/jobs";
 import type { Job, JobStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ExternalLink } from "./ExternalLink";
@@ -92,7 +92,7 @@ export const JobRow = memo(function JobRow({ job, selected, busy, onSelect, onSt
         )}
       </TableCell>
 
-      <TableCell>{formatSalary(job)}</TableCell>
+      <TableCell title={salaryPeriodNote(job) ?? undefined}>{formatSalary(job)}</TableCell>
       <TableCell className="text-muted-foreground">{formatDate(job.posted_date)}</TableCell>
       <TableCell className="text-muted-foreground">{formatDate(job.last_seen_at)}</TableCell>
 

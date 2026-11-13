@@ -70,8 +70,8 @@ import resume_ai
 from job_queries import (
     REMOTE_STATUSES,
     JobFilters,
+    SORT_KEYS,
     JobStatus,
-    SortKey,
     filter_jobs,
     job_stats,
     normalize_job,
@@ -381,6 +381,14 @@ class Job(BaseModel):
     job_type: str | None
     salary_low: float | None
     salary_high: float | None
+    salary_period: str | None = Field(
+        description='What the salary is per: "hour", "day", "week", "month", or "year"; '
+        "null when there's no salary or the job was saved before periods were kept"
+    )
+    salary_period_estimated: bool = Field(
+        description="True when salary_period is assumed because neither the site nor the "
+        "posting says (under $300 hourly, otherwise yearly)"
+    )
     url: str | None
     track: str | None
     posted_date: str | None
@@ -496,7 +504,13 @@ def job_filters(
         None, description="Matched skills the job must have; repeat for several (all are required)"
     ),
     min_salary: float | None = Query(
-        None, ge=0, description='Highest listed amount at least this. Excludes "Not listed"'
+        None,
+        ge=0,
+        description="Highest listed amount, per year, at least this ($50/hr counts as "
+        '104,000; see salary.PER_YEAR). Excludes "Not listed"',
+    ),
+    salary_listed: bool | None = Query(
+        None, description='Only jobs with a salary listed (true) or only "Not listed" ones (false)'
     ),
     posted_since: date | None = Query(None, description="Posted on or after this date (YYYY-MM-DD)"),
     seen_since: date | None = Query(None, description="Last seen by the search on or after this date"),
@@ -514,6 +528,7 @@ def job_filters(
         remote=remote_values,
         skills=tuple(s.strip() for s in skill or [] if s.strip()),
         min_salary=min_salary,
+        salary_listed=salary_listed,
         posted_since=posted_since,
         seen_since=seen_since,
         applied=applied,
@@ -676,14 +691,22 @@ def create_app(
     @app.get("/jobs", response_model=JobPage, dependencies=authorized)
     def list_jobs(
         filters: JobFilters = Depends(job_filters),
-        sort: SortKey = Query("last_seen", description="Same as the dashboard's Sort menu"),
+        sort: list[str] = Query(
+            ["last_seen"],
+            description="Same as the dashboard's Sort menu: "
+            f"{', '.join(SORT_KEYS)}. Several (comma-separated or repeated) sort the ties "
+            'of the ones before: "score,salary" is most skill matches, then highest salary. '
+            "Jobs that tie on every key stay newest first.",
+        ),
         limit: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
         offset: int = Query(0, ge=0),
         store: FirestoreJobStore = Depends(open_store),
     ) -> dict[str, Any]:
         """Tracked jobs, filtered and sorted. Filters combine with AND; a filter
         given several values matches any of them (except `skill`: all needed)."""
-        jobs = sort_jobs(filter_jobs(_all_jobs(store), filters), sort)
+        keys = _split(sort) or ("last_seen",)
+        _check_choices("sort", keys, SORT_KEYS)
+        jobs = sort_jobs(filter_jobs(_all_jobs(store), filters), keys)
         return {"jobs": jobs[offset : offset + limit], "total": len(jobs), "limit": limit, "offset": offset}
 
     # Declared before /jobs/{job_id} so "stats" isn't taken for a job ID.

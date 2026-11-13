@@ -34,6 +34,8 @@ from job_sites import (
 from job_boards import ACCENTURE_SEARCH_URL, INSIGHT_GLOBAL_URL, JOB_SEARCH_URLS
 from job_fit import CandidateProfile, FitScore, fit_label, score_fit
 from job_store import FirestoreJobStore, get_job_store
+from salary import PERIODS, salary_period
+from salary import format_salary as format_pay
 from search_skills import InvalidSkillsError, SearchSkills, skills_from_document
 
 load_dotenv()
@@ -321,8 +323,11 @@ NON_US_LOCATION_WORDS = [
 # * Insight Global: its own API on the same host (/all/jobs).
 # * Accenture: its Workday board (see KNOWN_CAREER_SITES in job_sites.py).
 # * Workday (<company>.wdN.myworkdayjobs.com/<site>), Greenhouse
-#   (boards.greenhouse.io/<company>), and Lever (jobs.lever.co/<company>)
-#   board URLs work as-is, and so do careers pages that link to one of those.
+#   (boards.greenhouse.io/<company>), Lever (jobs.lever.co/<company>), and
+#   Ashby (jobs.ashbyhq.com/<company>) board URLs work as-is, and so do
+#   careers pages that link to one of those.
+# * Remote job boards (Himalayas, Remote OK, Jobicy, We Work Remotely) list
+#   many companies' jobs; each job keeps its own company.
 # To add a company, add its URL to job_boards.py and to JOB_SEARCH_URLS there.
 
 # Per-URL overrides of a site's filters: "remote_only" (defaults to
@@ -418,6 +423,11 @@ class JobMatch:
     url: str
     track: str
     posted_date: str = ""
+    # What the salary is per ("hour", "day", "week", "month", "year"; "" when
+    # it can't be told), and whether that's only an estimate from the amount
+    # (the site and the posting don't say). See salary.py.
+    salary_period: str = ""
+    salary_period_estimated: bool = False
     matched_skills: list[str] = field(default_factory=list)
     min_years: int | None = None
     company: str = ""
@@ -847,6 +857,9 @@ def evaluate_posting(posting: Posting, site: JobSite, track: SearchTrack) -> Job
         return None
 
     fit: FitScore = score_fit(posting, track.profile or candidate_profile(), min_years)
+    period, period_estimated = salary_period(
+        posting.salary_period, posting.description, posting.salary_low, posting.salary_high
+    )
     return JobMatch(
         job_id=posting.job_id,
         title=posting.title,
@@ -856,6 +869,8 @@ def evaluate_posting(posting: Posting, site: JobSite, track: SearchTrack) -> Job
         job_type=posting.job_type or "Unknown",
         salary_low=posting.salary_low,
         salary_high=posting.salary_high,
+        salary_period=period,
+        salary_period_estimated=period_estimated,
         url=posting.url,
         track=track.name,
         posted_date=format_posted_date(posting.posted_date),
@@ -935,13 +950,21 @@ def search_site(
         workers,
     )
     failed_terms = []
-    for (_, term), _, error in listed:
-        if error is not None:
-            # Retries are already exhausted; skip this term rather than lose
-            # every other term's matches (and the email).
-            log(f"  {site.name}: search {term!r} FAILED, skipping: "
-                  f"{type(error).__name__}: {error}")
-            failed_terms.append(term)
+    errors = [error for _, _, error in listed if error is not None]
+    if len(listed) > 1 and len(errors) == len(listed) and len({str(e) for e in errors}) == 1:
+        # One failure behind every term (a board that couldn't be
+        # downloaded, say): one line, not one per term.
+        log(f"  {site.name}: couldn't be searched, skipping it: "
+            f"{type(errors[0]).__name__}: {errors[0]}")
+        failed_terms = [term for (_, term), _, _ in listed]
+    else:
+        for (_, term), _, error in listed:
+            if error is not None:
+                # Retries are already exhausted; skip this term rather than lose
+                # every other term's matches (and the email).
+                log(f"  {site.name}: search {term!r} FAILED, skipping: "
+                    f"{type(error).__name__}: {error}")
+                failed_terms.append(term)
 
     to_fetch: dict[str, Posting] = {}
     onsite: dict[str, str] = {}
@@ -1069,6 +1092,8 @@ def run_all_searches(
 
     all_matches: dict[str, JobMatch] = {}
     failed_searches: list[str] = []
+    # Sites where every search failed, listed by name instead of term by term.
+    failed_sites: list[str] = []
     total_searches = 0
     with ThreadPoolExecutor(max_workers=len(sites)) as pool:
         futures = [
@@ -1078,6 +1103,8 @@ def run_all_searches(
             result = future.result()
             total_searches += result.searches
             failed_searches.extend(f"{site.name}: {term}" for term in result.failed_terms)
+            if result.failed_terms and len(result.failed_terms) == result.searches:
+                failed_sites.append(site.name)
             if onsite is not None:
                 onsite.update(result.onsite)
             if checked is not None:
@@ -1090,7 +1117,10 @@ def run_all_searches(
     if failed_searches and len(failed_searches) == total_searches:
         raise RuntimeError("Every search failed; the job sites may be unreachable.")
     if failed_searches:
-        print(f"WARNING: {len(failed_searches)} search(es) failed: {failed_searches}")
+        shown = [f"{name} (every search)" for name in failed_sites] + [
+            search for search in failed_searches if search.split(": ", 1)[0] not in failed_sites
+        ]
+        print(f"WARNING: {len(failed_searches)} search(es) failed: {shown}")
 
     track_order = {track.name: index for index, track in enumerate(tracks)}
 
@@ -1111,13 +1141,8 @@ def run_all_searches(
 
 
 def format_salary(job: JobMatch) -> str:
-    if not job.salary_low and not job.salary_high:
-        return "Not listed"
-    if not job.salary_low:
-        return f"Up to ${job.salary_high:,.0f}"
-    if not job.salary_high:
-        return f"From ${job.salary_low:,.0f}"
-    return f"${job.salary_low:,.0f} - ${job.salary_high:,.0f}"
+    """"$60 - $65/hr", "From $140,000/yr", "From $64/hr (est.)", ... (salary.py)."""
+    return format_pay(job.salary_low, job.salary_high, job.salary_period, job.salary_period_estimated)
 
 
 REMOTE_LABELS = {
@@ -1365,8 +1390,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME_OR_URL",
         dest="sites",
         help="search only this site: a name (accenture, 'insight global'), a board "
-        "kind (workday, greenhouse, lever, insight-global), or any careers page / "
-        "job board URL, even one not in JOB_SEARCH_URLS. Repeat for several.",
+        "kind (workday, greenhouse, lever, ashby, insight-global, himalayas, remoteok, "
+        "jobicy, weworkremotely), or any careers page / job board URL, even one not in "
+        "JOB_SEARCH_URLS. Repeat for several.",
     )
     parser.add_argument(
         "--include-unmarked",
@@ -1577,7 +1603,9 @@ def recheck_saved_jobs(
             if data.get("work_arrangement"):
                 continue  # you've said how it's worked
             site = next((s for s in sites if doc_id.startswith(s.id_prefix)), None)
-            if site is not None:
+            # Sites that can't load one job (the remote job boards, Lever)
+            # only see their jobs again in a search.
+            if site is not None and site.supports_lookup:
                 targets.append((doc_id, data, site))
         if not targets:
             return 0
@@ -1672,6 +1700,25 @@ def skills_mismatch(posting: Posting, track: SearchTrack, matched: list[str]) ->
     if track.required_skills and not _any_same_skill(track.required_skills, matched):
         return f"it mentions {', '.join(matched)}, but none of your core skills"
     return None
+
+
+def saved_salary_period(data: dict[str, Any], description: str | None) -> dict[str, Any]:
+    """The ``salary_period`` fields a saved job should have, or {} if it has
+    them already. A period the site or posting stated is kept; an estimate
+    (or a job saved before periods were kept) is worked out again from the
+    description and amounts. The site's own field isn't saved, so a search
+    that finds the job again is what brings that back."""
+    if data.get("salary_period") in PERIODS and data.get("salary_period_estimated") is False:
+        return {}
+
+    def amount(value: Any) -> float:
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
+
+    period, estimated = salary_period(
+        "", description, amount(data.get("salary_low")), amount(data.get("salary_high"))
+    )
+    fields = {"salary_period": period, "salary_period_estimated": estimated}
+    return fields if any(data.get(key) != value for key, value in fields.items()) else {}
 
 
 def assess_saved_job(
@@ -1775,8 +1822,14 @@ def reassess_saved_jobs(
         texts.update(fetched)
 
     changes: dict[str, dict[str, Any]] = {}
+    # Salary periods for jobs saved without one (they aren't skill changes,
+    # so they're written but not counted as changed).
+    pay_fixes: dict[str, dict[str, Any]] = {}
     reassessed = no_longer_match = 0
     for doc_id, data in jobs:
+        pay = saved_salary_period(data, texts.get(doc_id))
+        if pay:
+            pay_fixes[doc_id] = pay
         if doc_id not in texts:
             continue
         fields = assess_saved_job(data, texts[doc_id], tracks)
@@ -1784,7 +1837,10 @@ def reassess_saved_jobs(
         no_longer_match += not fields["matches_skills"]
         if any(data.get(key) != value for key, value in fields.items()):
             changes[doc_id] = fields
-    store.update_jobs(changes)
+    store.update_jobs({
+        doc_id: {**pay_fixes.get(doc_id, {}), **changes.get(doc_id, {})}
+        for doc_id in {*changes, *pay_fixes}
+    })
 
     summary = ReassessSummary(
         total_jobs=len(jobs),

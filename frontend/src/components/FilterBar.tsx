@@ -7,10 +7,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   REMOTE_STATUS_INFO,
+  SALARY_FILTER_LABELS,
   SORT_OPTIONS,
+  thenByOptions,
   type JobFilters,
   type FilterOption,
   type RemoteStatus,
+  type SalaryFilter,
   type SortKey,
 } from "@/lib/jobs";
 import { JOB_STATUSES, STATUS_INFO, type JobStatus } from "@/lib/types";
@@ -18,7 +21,8 @@ import { MultiSelectFilter } from "./MultiSelectFilter";
 
 interface Props {
   filters: JobFilters;
-  sort: SortKey;
+  /** The sort, then (optionally) what orders its ties. */
+  sort: SortKey[];
   /** Companies the jobs are from, with counts (see `distinctCompanies`). */
   companies: FilterOption[];
   /** Remote statuses present in the data (see `distinctRemoteStatuses`). */
@@ -30,7 +34,7 @@ interface Props {
   /** Refresh is re-scoring the saved jobs against your skills (before reloading them). */
   reassessing?: boolean;
   onFiltersChange: (filters: JobFilters) => void;
-  onSortChange: (sort: SortKey) => void;
+  onSortChange: (sort: SortKey[]) => void;
   onRefresh: () => void;
 }
 
@@ -48,6 +52,13 @@ export function FilterBar({
   onRefresh,
 }: Props) {
   const update = (patch: Partial<JobFilters>) => onFiltersChange({ ...filters, ...patch });
+  const [primary = "last_seen", thenBy] = sort;
+  const tieOptions = thenByOptions(primary);
+  const label = (key: SortKey) => SORT_OPTIONS.find((option) => option.value === key)?.label;
+  const changePrimary = (next: SortKey) =>
+    // Keep "Then by" unless it's the new sort itself (or its other direction).
+    onSortChange(thenBy && thenByOptions(next).some((option) => option.value === thenBy) ? [next, thenBy] : [next]);
+  const changeThenBy = (next: string) => onSortChange(next === "none" ? [primary] : [primary, next as SortKey]);
 
   return (
     <div className="flex flex-wrap items-end gap-3">
@@ -94,6 +105,7 @@ export function FilterBar({
           noneLabel="All companies"
           emptyLabel="No companies yet."
           clearLabel="Clear companies"
+          searchLabel="Search companies"
         />
       </div>
 
@@ -146,18 +158,56 @@ export function FilterBar({
           noneLabel="Any skill"
           emptyLabel="No skills matched yet."
           clearLabel="Clear skills"
+          searchLabel="Search skills"
         />
       </div>
 
       <div className="flex flex-col gap-1.5">
+        <Label htmlFor="filter-salary">Salary</Label>
+        <Select value={filters.salary} onValueChange={(value) => update({ salary: value as SalaryFilter })}>
+          <SelectTrigger id="filter-salary" className="w-[130px]">
+            <SelectValue>{SALARY_FILTER_LABELS[filters.salary]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(SALARY_FILTER_LABELS) as SalaryFilter[]).map((option) => (
+              <SelectItem key={option} value={option}>
+                {SALARY_FILTER_LABELS[option]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
         <Label htmlFor="sort-by">Sort</Label>
-        <Select value={sort} onValueChange={(value) => onSortChange(value as SortKey)}>
+        <Select value={primary} onValueChange={(value) => changePrimary(value as SortKey)}>
           <SelectTrigger id="sort-by" className="w-[200px]">
-            <SelectValue>{SORT_OPTIONS.find((option) => option.value === sort)?.label}</SelectValue>
+            <SelectValue>{label(primary)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {SORT_OPTIONS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
+              <SelectItem key={option.value} value={option.value} title={option.hint}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="sort-then-by">Then by</Label>
+        <Select value={thenBy ?? "none"} onValueChange={changeThenBy}>
+          <SelectTrigger
+            id="sort-then-by"
+            className={thenBy ? "w-[200px]" : "text-muted-foreground w-[200px]"}
+            title="Orders the jobs that tie on the first sort. Jobs that still tie stay newest first."
+          >
+            <SelectValue>{thenBy ? label(thenBy) : "Nothing else"}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Nothing else</SelectItem>
+            {tieOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value} title={option.hint}>
                 {option.label}
               </SelectItem>
             ))}

@@ -368,7 +368,9 @@ def test_list_jobs_returns_every_job_newest_first(jobs_client):
         ({"remote": "unmarked"}, ["acn-java"]),
         ({"skill": "python"}, ["acn-python"]),
         ([("skill", "React"), ("skill", "TypeScript")], ["ig-react"]),
-        ({"min_salary": 100}, ["acn-python"]),
+        ({"min_salary": 140000}, ["acn-python"]),  # per year: ig-react's $65/hr is $135,200
+        ({"salary_listed": "true"}, ["ig-react", "acn-python"]),
+        ({"salary_listed": "false"}, ["acn-java"]),
         ({"posted_since": "2026-10-04"}, ["ig-react", "acn-java"]),
         ({"seen_since": "2026-11-04"}, ["ig-react", "acn-java"]),
         ({"applied": "true"}, ["acn-python"]),
@@ -383,8 +385,18 @@ def test_list_jobs_filters(jobs_client, params, expected):
 
 def test_list_jobs_sorts_and_pages(jobs_client):
     assert job_ids(jobs_client.get("/jobs", params={"sort": "salary"})) == ["acn-python", "ig-react", "acn-java"]
+    # ig-react's $55/hr is $114,400 a year; "Not listed" stays last.
+    assert job_ids(jobs_client.get("/jobs", params={"sort": "salary_lowest"})) == ["ig-react", "acn-python", "acn-java"]
     assert job_ids(jobs_client.get("/jobs", params={"sort": "title"})) == ["acn-java", "ig-react", "acn-python"]
     assert job_ids(jobs_client.get("/jobs", params={"sort": "fit"})) == ["ig-react", "acn-python", "acn-java"]
+
+    # Several keys: the first decides, the next orders its ties. ig-react and
+    # acn-python both match 2 skills; acn-java matches 1.
+    assert job_ids(jobs_client.get("/jobs", params={"sort": "score,salary"})) == ["acn-python", "ig-react", "acn-java"]
+    assert job_ids(jobs_client.get("/jobs", params={"sort": "score,salary_lowest"})) == ["ig-react", "acn-python", "acn-java"]
+    assert job_ids(jobs_client.get("/jobs", params=[("sort", "score"), ("sort", "salary_lowest")])) == [
+        "ig-react", "acn-python", "acn-java",
+    ]
 
     page = jobs_client.get("/jobs", params={"sort": "salary", "limit": 2, "offset": 1}).json()
     assert [job["id"] for job in page["jobs"]] == ["ig-react", "acn-java"]
@@ -397,7 +409,8 @@ def test_list_jobs_sorts_and_pages(jobs_client):
     [
         ({"status": "bogus"}, "Unknown status 'bogus'; expected one of unemailed, emailed"),
         ({"remote": "maybe"}, "Unknown remote 'maybe'; expected one of remote, unmarked, not_remote"),
-        ({"sort": "nope"}, "Invalid request: sort:"),
+        ({"sort": "nope"}, "Unknown sort 'nope'; expected one of last_seen, posted, salary"),
+        ({"sort": "score,nope"}, "Unknown sort 'nope'"),
         ({"limit": 0}, "Invalid request: limit:"),
         ({"limit": 501}, "Invalid request: limit:"),
         ({"min_salary": -1}, "Invalid request: min_salary:"),
@@ -429,9 +442,22 @@ def test_get_job(jobs_client):
     job = response.json()["job"]
     assert (job["id"], job["title"], job["notes"]) == ("acn-python", "Senior Python Engineer", "Recruiter: Sam")
 
+    # Saved before salary periods were kept: no period yet.
+    assert (job["salary_period"], job["salary_period_estimated"]) == (None, False)
+
     missing = jobs_client.get("/jobs/nope")
     assert missing.status_code == 404
     assert missing.json() == {"error": "Job nope is not in the store"}
+
+
+def test_get_job_says_what_its_salary_is_per(job_store):
+    job_store.update_jobs({"ig-react": {"salary_period": "hour", "salary_period_estimated": True}})
+    client = TestClient(api.create_app(api.RunManager(FakeSearch()), store_factory=lambda: job_store))
+
+    job = client.get("/jobs/ig-react").json()["job"]
+
+    assert (job["salary_low"], job["salary_high"]) == (55.0, 65.0)
+    assert (job["salary_period"], job["salary_period_estimated"]) == ("hour", True)
 
 
 def test_patch_job_sets_status_like_the_dashboard(jobs_client, job_store):
